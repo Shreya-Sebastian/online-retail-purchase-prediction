@@ -62,7 +62,91 @@ probability (how many will respond), so both are measured on the test month:
 
 ## Results
 
-Not run on the real data yet.
+From one run of the pipeline on Databricks Free Edition (serverless), on the full dataset.
+
+### Data
+
+| | |
+|---|---|
+| Raw rows (both yearly sheets) | 1,067,371 |
+| No customer id | 243,007 |
+| Zero or negative price | 6,207 |
+| Non-product codes | 5,931 |
+| Clean rows (returns included) | 794,165 (17,586 returns) |
+| Customers | 5,875 |
+
+The dropped counts overlap, and exact duplicates are removed as well. About 23% of rows
+have no customer id. They can't be followed over time, so everything below is about
+customers who ordered while logged in. The keyword categories cover 72% of spend.
+
+19 monthly snapshots (March 2010 to September 2011) have 1,700 to 4,300 active customers
+each. The share who buy again within 90 days peaks in September (0.58 in 2010) and is
+lowest after Christmas (0.33). The model trains on cutoffs up to July 2011, is calibrated
+and chosen on August 2011, and is tested on September 2011.
+
+### Segments
+
+k-means with k from 2 to 8 and a Gaussian mixture were compared on the training months.
+k-means with k = 3 had the highest silhouette of all 14 options (0.32, against 0.23 for
+k = 4). It gave the same segments for every seed (adjusted Rand index 1.00), and no
+segment was under 5%. The Gaussian mixture separated less well at every k and was unstable
+at k = 3. Its BIC kept improving as k grew, which says little with this many rows.
+
+| Segment | Share | Last order | Orders / year | Spend / year | Returns |
+|---|---|---|---|---|---|
+| Active regulars | 40% | 31 days ago | 5 | €1,722 | 1% of lines |
+| Occasional or lapsing | 55% | 114 days ago | 1 | €316 | 0% |
+| High-return | 5% | 105 days ago | 2 | €379 | 20% of lines |
+
+(medians per segment)
+
+### Propensity models (test month: September 2011)
+
+| Target | Base rate | Model | ROC AUC | Avg. precision | Lift, top 10% | Calibration error (raw → isotonic) |
+|---|---|---|---|---|---|---|
+| any purchase | 0.50 | recent orders (no model) | 0.747 | 0.749 | 1.84 | (not a probability) → 0.073 |
+| | | logistic regression | 0.764 | 0.782 | 1.91 | 0.070 → 0.065 |
+| | | boosted trees | **0.772** | **0.792** | **1.93** | 0.057 → 0.042 |
+| kitchen | 0.43 | recent orders | 0.727 | 0.671 | 1.94 | → 0.065 |
+| | | logistic regression | 0.767 | 0.732 | 2.10 | 0.054 → 0.060 |
+| | | boosted trees | **0.778** | **0.750** | **2.17** | 0.055 → 0.047 |
+| bags | 0.28 | recent orders | 0.715 | 0.507 | 2.28 | → 0.047 |
+| | | logistic regression | 0.806 | 0.660 | 2.86 | 0.034 → 0.041 |
+| | | boosted trees | **0.827** | **0.702** | **3.03** | 0.041 → 0.024 |
+
+What the numbers say:
+
+- **Whether a customer buys again is mostly explained by recent activity.** Counting
+  recent orders already reaches an AUC of 0.75, and boosted trees add 0.025.
+- **The models help most for category purchases.** For bags, the trees reach
+  0.83 against 0.72 for the baseline, and average precision rises from 0.51 to 0.70. What
+  a customer bought before (their share of spend per category) matters, and order counts
+  don't capture it. Kitchen items make up so much of the range that predicting them is
+  close to predicting any purchase.
+- **Segments did not improve the predictions.** Adding the segment as a feature changed
+  nothing (any purchase: 0.771 against 0.772). One model per segment looked best on the
+  validation month (0.819) but was slightly worse on the test month (0.768). The segments
+  are built from the same features the trees already use, so they add no information. They
+  are more useful for describing customers than for predicting their purchases.
+- **The trees' probabilities were already close to calibrated.** Isotonic calibration on
+  the validation month lowered the trees' calibration error for all three targets. For
+  logistic regression it helped only for any purchase and made kitchen and bags slightly
+  worse. The baseline needs it, because order counts are not probabilities.
+
+For each target, notebook 04 registers the better of logistic regression and boosted
+trees in Unity Catalog as `propensity_<target>`, choosing by average precision on the
+validation month.
+
+### Limitations
+
+- One test month. September is in the pre-Christmas season, and validation AUC (August)
+  was higher than test AUC by 0.03 to 0.04. A rolling evaluation over several months would
+  give a better estimate.
+- Snapshots before December 2010 have less than a year of history, because the data
+  starts in December 2009. Those months have fewer and more recently active customers,
+  and their year-long features are cut short.
+- Categories come from keywords in item descriptions. 28% of spend is "other".
+- Customers without an id (23% of rows) are left out entirely.
 
 ## Running it
 

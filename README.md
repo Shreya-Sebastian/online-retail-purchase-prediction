@@ -12,7 +12,9 @@ The questions:
 
 ## Pipeline
 
-Four notebooks, run in order as one Databricks job (`databricks.yml`):
+Four notebooks, run in order. They were run one by one and then as one Databricks job set up in
+the UI. `databricks.yml` defines the same job as an Asset Bundle, but that file has not been
+deployed or tested.
 
 | Notebook | Writes | What it does |
 |---|---|---|
@@ -29,8 +31,8 @@ notebooks only load data, call it, and log the results.
 The raw export mixes purchases with other things. Cancellations (invoice numbers
 starting with C) are kept and flagged as returns, because the return rate is a
 feature. Rows without a customer id, non-product codes (postage, bank charges,
-manual adjustments) and zero prices are dropped. The notebook reports how many rows
-each rule removes.
+manual adjustments) and zero or negative prices are dropped. The notebook reports how many
+rows each rule matches. The counts overlap.
 
 The data has no product hierarchy, so categories come from keyword rules on the item
 description. The notebook shows how much of the spend they cover.
@@ -82,15 +84,16 @@ have no customer id. They can't be followed over time, so everything below is ab
 customers who ordered while logged in. The keyword categories cover 72% of spend.
 
 19 monthly snapshots (March 2010 to September 2011) have 1,700 to 4,300 active customers
-each. The share who buy again within 90 days peaks in September (0.58 in 2010) and is
-lowest after Christmas (0.33). The model trains on cutoffs up to July 2011, is calibrated
+each. Apart from the earliest months (see Limitations), the share who buy again within 90
+days is highest for the September cutoffs (0.58 in 2010, 0.50 in 2011) and lowest after
+Christmas (0.33). The model trains on cutoffs up to July 2011, is calibrated
 and chosen on August 2011, and is tested on September 2011.
 
 ### Segments
 
 k-means with k from 2 to 8 and a Gaussian mixture were compared on the training months.
 k-means with k = 3 had the highest silhouette of all 14 options (0.32, against 0.23 for
-k = 4). It gave the same segments for every seed (adjusted Rand index 1.00), and no
+k = 4). Two random seeds gave the same segments (adjusted Rand index 1.00), and no
 segment was under 5%. The Gaussian mixture separated less well at every k and was unstable
 at k = 3. Its BIC kept improving as k grew, which says little with this many rows.
 
@@ -100,7 +103,7 @@ at k = 3. Its BIC kept improving as k grew, which says little with this many row
 | Occasional or lapsing | 55% | 114 days ago | 1 | €316 | 0% |
 | High-return | 5% | 105 days ago | 2 | €379 | 20% of lines |
 
-(medians per segment)
+(shares and medians are over training snapshots, so a customer counts once per month they appear in)
 
 ### Propensity models (test month: September 2011)
 
@@ -121,14 +124,16 @@ What the numbers say:
 - **Whether a customer buys again is mostly explained by recent activity.** Counting
   recent orders already reaches an AUC of 0.75, and boosted trees add 0.025.
 - **The models help most for category purchases.** For bags, the trees reach
-  0.83 against 0.72 for the baseline, and average precision rises from 0.51 to 0.70. What
-  a customer bought before (their share of spend per category) matters, and order counts
-  don't capture it. Kitchen items make up so much of the range that predicting them is
-  close to predicting any purchase.
+  0.83 against 0.72 for the baseline, and average precision rises from 0.51 to 0.70. A
+  likely reason is that the models see what a customer bought before (their share of spend
+  per category), while the baseline only counts orders. I did not test this directly.
+  Kitchen purchases are almost as common as any purchase (0.43 against 0.50 in the test
+  month), so that target behaves much like the first one.
 - **Segments did not improve the predictions.** Adding the segment as a feature changed
   nothing (any purchase: 0.771 against 0.772). One model per segment looked best on the
   validation month (0.819) but was slightly worse on the test month (0.768). The segments
-  are built from the same features the trees already use, so they add no information. They
+  are built from features the trees already use, which is probably why they add nothing
+  here. They
   are more useful for describing customers than for predicting their purchases.
 - **The trees' probabilities were already close to calibrated.** Isotonic calibration on
   the validation month lowered the trees' calibration error for all three targets. For
@@ -142,7 +147,7 @@ validation month.
 ### Limitations
 
 - One test month. September is in the pre-Christmas season, and validation AUC (August)
-  was higher than test AUC by 0.03 to 0.04. A rolling evaluation over several months would
+  was higher than test AUC by 0.015 to 0.05, depending on the model. A rolling evaluation over several months would
   give a better estimate.
 - Snapshots before December 2010 have less than a year of history, because the data
   starts in December 2009. Those months have fewer and more recently active customers,
@@ -178,7 +183,7 @@ local Spark, so they need Java 17.
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scriptsctivate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 pytest
 ```

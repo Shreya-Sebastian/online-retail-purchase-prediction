@@ -62,7 +62,9 @@ probability (how many will respond), so both are measured on the test month:
 
 ## Results
 
-From one run of the pipeline on Databricks Free Edition (serverless), on the full dataset.
+From the pipeline on Databricks Free Edition (serverless), on the full dataset. The
+notebooks were first run one by one, then end to end as one Databricks job (four tasks,
+7 minutes 41 seconds).
 
 ### Data
 

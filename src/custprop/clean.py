@@ -36,12 +36,14 @@ TEXT_COLUMNS = ("Invoice", "StockCode", "Description", "Country")
 
 
 def prepare_raw_pandas(pdf):
-    """Make the Excel export safe to hand to Spark.
+    """Make the Excel export safe to hand to Spark and to store as a Delta table.
 
-    Excel cells in a text column are not always text: some descriptions and stock codes
-    are numbers, and empty cells come back as NaN. A pandas column mixing those can't be
-    converted to a Spark column, so every text column becomes one string type with real
-    missing values.
+    - Excel cells in a text column are not always text: some descriptions and stock codes
+      are numbers, and empty cells come back as NaN. A pandas column mixing those can't be
+      converted to a Spark column, so every text column becomes one string type with real
+      missing values.
+    - Delta doesn't allow spaces in column names ("Customer ID"), so the columns get the
+      snake_case names used everywhere else.
     """
     import pandas as pd
 
@@ -49,20 +51,23 @@ def prepare_raw_pandas(pdf):
     for col in TEXT_COLUMNS:
         if col in out:
             out[col] = out[col].map(lambda v: None if pd.isna(v) else str(v)).astype("string")
-    return out
+    return out.rename(columns=RAW_COLUMNS)
 
 
-def rename_raw(raw: DataFrame) -> DataFrame:
-    df = raw.select([F.col(f"`{src}`").alias(dst) for src, dst in RAW_COLUMNS.items()])
-    # Read through pandas, a missing customer id is NaN, which Spark keeps as a number and
-    # would cast to customer 0. Make it a real null first.
+def standardise(raw: DataFrame) -> DataFrame:
+    """Accept the export with its original column names or already renamed."""
+    df = raw
+    if "Invoice" in raw.columns:
+        df = raw.select([F.col(f"`{src}`").alias(dst) for src, dst in RAW_COLUMNS.items()])
+    # Read through pandas, a missing customer id can be NaN, which Spark keeps as a number
+    # and would cast to customer 0. Make it a real null first.
     if dict(df.dtypes)["customer_id"] in ("double", "float"):
         df = df.withColumn("customer_id", F.when(~F.isnan("customer_id"), F.col("customer_id")))
     return df
 
 
 def clean(raw: DataFrame) -> DataFrame:
-    df = rename_raw(raw) if "Invoice" in raw.columns else raw
+    df = standardise(raw)
     code = F.upper(F.trim(F.col("stock_code").cast("string")))
     df = (
         df.withColumn("invoice", F.trim(F.col("invoice").cast("string")))
@@ -90,7 +95,7 @@ def clean(raw: DataFrame) -> DataFrame:
 
 def clean_report(raw: DataFrame, cleaned: DataFrame) -> dict:
     """Row counts before and after, so the notebook can show what was dropped and why."""
-    df = rename_raw(raw) if "Invoice" in raw.columns else raw
+    df = standardise(raw)
     code = F.upper(F.trim(F.col("stock_code").cast("string")))
     row = df.agg(
         F.count("*").alias("raw_rows"),

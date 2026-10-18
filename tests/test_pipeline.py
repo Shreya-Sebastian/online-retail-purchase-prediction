@@ -134,5 +134,13 @@ def test_mixed_type_text_columns_reach_spark(spark, raw_pdf):
     with pytest.raises(Exception):
         spark.createDataFrame(pdf)  # fails without prepare_raw_pandas, as on Databricks
     rows = spark.createDataFrame(prepare_raw_pandas(pdf)).toPandas()
-    assert rows["Description"].tolist()[:3] == ["WHITE MUG", "21258", None]
-    assert rows["StockCode"].tolist()[1] == "22423"
+    assert rows["description"].tolist()[:3] == ["WHITE MUG", "21258", None]
+    assert rows["stock_code"].tolist()[1] == "22423"
+
+
+def test_prepared_export_has_delta_safe_names_and_cleans_the_same(spark, raw_pdf, txns):
+    prepared = spark.createDataFrame(prepare_raw_pandas(raw_pdf))
+    assert all(" " not in c for c in prepared.columns)  # Delta rejects "Customer ID"
+    assert clean(prepared).count() == txns.count()
+    report = clean_report(prepared, txns)
+    assert report["no_customer"] == 1 and report["non_product"] == 1

@@ -1,0 +1,53 @@
+# Databricks Asset Bundle: deploys the notebooks and package and defines the pipeline as one job.
+#   databricks bundle validate
+#   databricks bundle deploy
+#   databricks bundle run custprop_pipeline
+# The tasks run on serverless compute, so no cluster is defined.
+
+bundle:
+  name: custprop
+
+variables:
+  catalog:
+    default: workspace
+  schema:
+    default: custprop
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://YOUR-WORKSPACE.cloud.databricks.com  # replace with your workspace URL
+
+resources:
+  jobs:
+    custprop_pipeline:
+      name: custprop-pipeline
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+      tasks:
+        - task_key: ingest
+          notebook_task:
+            notebook_path: ./notebooks/01_ingest.py
+        - task_key: snapshots
+          depends_on: [{task_key: ingest}]
+          notebook_task:
+            notebook_path: ./notebooks/02_snapshots.py
+        - task_key: segments
+          depends_on: [{task_key: snapshots}]
+          notebook_task:
+            notebook_path: ./notebooks/03_segments.py
+        - task_key: propensity
+          depends_on: [{task_key: segments}]
+          notebook_task:
+            notebook_path: ./notebooks/04_propensity.py
+      # weekly refresh; paused so nothing runs until you switch it on
+      schedule:
+        quartz_cron_expression: "0 0 6 ? * MON"
+        timezone_id: Europe/Amsterdam
+        pause_status: PAUSED

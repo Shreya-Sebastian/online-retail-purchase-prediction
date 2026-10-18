@@ -8,7 +8,7 @@ from custprop import propensity, segment
 from custprop.categories import category_of
 from custprop.clean import clean, clean_report, prepare_raw_pandas
 from custprop.config import monthly_cutoffs
-from custprop.snapshots import FEATURE_COLUMNS, cutoffs_frame, features, labels, snapshots
+from custprop.snapshots import EXTENDED_COLUMNS, NEW_COLUMNS, cutoffs_frame, features, labels, snapshots
 from custprop.synthetic import raw_transactions
 
 
@@ -57,6 +57,9 @@ def _tiny(spark):
         ("3", datetime(2011, 3, 15), "A", "JUMBO BAG", 1, 1.95, False),
         ("4", datetime(2010, 12, 1), "B", "CAKE TIN", 3, 4.95, False),
         ("5", datetime(2011, 3, 1), "B", "CAKE TIN", 1, 4.95, False),  # on the cutoff day: label, not feature
+        # customer C bought in last year's version of the label window, and once in the trend window
+        ("6", datetime(2010, 3, 10), "C", "JUMBO BAG", 4, 1.95, False),  # 356 days before 2011-03-01
+        ("7", datetime(2010, 11, 15), "C", "TEA MUG", 2, 2.50, False),  # 106 days before
     ]
     pdf = pd.DataFrame(rows, columns=["invoice", "invoice_ts", "customer_id", "description", "quantity", "price", "is_return"])
     pdf["invoice_date"] = pdf["invoice_ts"].dt.date
@@ -78,6 +81,23 @@ def test_features_use_only_history(spark):
     assert b["recency_days"] == 90 and b["orders_365d"] == 1  # the purchase on the cutoff day is not history
 
 
+def test_new_features(spark):
+    f = features(_tiny(spark), cutoffs_frame(spark, [date(2011, 3, 1)])).toPandas().set_index("customer_id")
+    a, b, c = f.loc["A"], f.loc["B"], f.loc["C"]
+    # regularity: A ordered 50 and 9 days before the cutoff, one gap of 41 days
+    assert a["gap_mean_days"] == 41 and a["gap_cv"] == 0
+    assert b["gap_mean_days"] == 365 and b["gap_cv"] == 0  # one order day: no gaps
+    assert c["gap_mean_days"] == 250
+    # category recency, with one day more than the history for categories never bought
+    assert a["days_since_bags"] == 50 and a["days_since_kitchen"] == 9 and a["days_since_toys"] == 366
+    # trend window is 91 to 180 days back: B's order 90 days back is not in it, C's at 106 is
+    assert b["orders_prev_90d"] == 0 and c["orders_prev_90d"] == 1 and c["spend_prev_90d"] == 5.0
+    # seasonality: last year's label window is 276 to 365 days back
+    assert c["orders_same_window_last_year"] == 1 and a["orders_same_window_last_year"] == 0
+    assert round(c["spend_same_window_last_year"], 2) == 7.8
+    assert not f[NEW_COLUMNS].isna().any().any()
+
+
 def test_labels_use_only_the_window_after(spark):
     t = _tiny(spark)
     y = labels(t, cutoffs_frame(spark, [date(2011, 3, 1)]), 90, ("any", "bags", "kitchen")).toPandas().set_index("customer_id")
@@ -90,7 +110,7 @@ def test_labels_use_only_the_window_after(spark):
 def test_end_to_end(spark, txns):
     cut = monthly_cutoffs(date(2010, 9, 1), date(2011, 6, 1))
     snaps = snapshots(txns, cutoffs_frame(spark, cut), 365, 90, ("any", "kitchen")).toPandas()
-    assert not snaps[FEATURE_COLUMNS].isna().any().any()
+    assert not snaps[EXTENDED_COLUMNS].isna().any().any()
     assert snaps.groupby(["cutoff", "customer_id"]).size().max() == 1
 
     train, valid, test = propensity.split_by_cutoff(snaps)
@@ -105,10 +125,22 @@ def test_end_to_end(spark, txns):
 
     results = propensity.compare_models(train, valid, test, "any")
     names = [r.name for r in results]
-    assert names == ["recent_orders", "logistic", "gbm", "gbm_segment", "gbm_per_segment"]
+    assert names == ["recent_orders", "logistic", "gbm", "logistic_ext", "gbm_ext",
+                     "gbm_ext_segment", "gbm_ext_per_segment"]
+    by_name = {r.name: r for r in results}
+    assert len(by_name["gbm_ext"].features) > len(by_name["gbm"].features)
     out = propensity.results_table(results)
     assert out["test_roc_auc"].between(0, 1).all()
     assert out.loc[out["model"] == "gbm", "test_roc_auc"].item() > 0.6  # there is signal to find
+
+    seg = propensity.metrics_by_segment(test, by_name["gbm_ext"].test_scores, "any")
+    assert seg["customers"].sum() == len(test)
+    assert set(seg["segment"]) == set(test["segment"])
+
+    rolling = propensity.rolling_evaluation(snaps, "any", months=3)
+    assert rolling["test_cutoff"].nunique() == 3
+    assert set(rolling["model"]) == {"recent_orders", "gbm", "gbm_ext"}
+    assert max(rolling["test_cutoff"]) == max(snaps["cutoff"])
 
 
 def test_metrics_on_known_values():
@@ -118,6 +150,12 @@ def test_metrics_on_known_values():
     assert m["roc_auc"] == 1.0 and m["base_rate"] == 0.5
     assert propensity.lift_at(y, p, 0.5) == 2.0
     assert propensity.expected_calibration_error(np.array([0, 1]), np.array([0.0, 1.0]), bins=2) == 0.0
+
+
+def test_rolling_needs_enough_cutoffs():
+    df = pd.DataFrame({"cutoff": [date(2011, m, 1) for m in range(1, 5)]})
+    with pytest.raises(ValueError):
+        propensity.rolling_evaluation(df, "any", months=3)
 
 
 def test_split_needs_enough_cutoffs():

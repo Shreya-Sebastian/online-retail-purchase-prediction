@@ -50,10 +50,26 @@ behaviour and be tested on their earlier behaviour, which flatters it.
 For each target the same comparison is run:
 
 - **recent_orders**: no model, rank by number of orders in the last 90 days
-- **logistic**: logistic regression on log-scaled features
-- **gbm**: gradient-boosted trees
-- **gbm_segment**: gradient-boosted trees with the segment as a feature
-- **gbm_per_segment**: one model per segment
+- **logistic**, **gbm**: logistic regression on log-scaled features, and gradient-boosted
+  trees, both on the base features (recency, frequency, spend, returns, category shares)
+- **logistic_ext**, **gbm_ext**: the same two models on the extended features (below)
+- **gbm_ext_segment**: extended trees with the segment as a feature
+- **gbm_ext_per_segment**: one extended model per segment
+
+The extended features add information the segments don't contain:
+
+- seasonality: orders and spend in the same 90-day window one year earlier
+- regularity: the mean gap between order days, and how much the gaps vary
+- trend: orders and spend in the 90 days before the last 90
+- category recency: days since the last purchase in each category
+
+All of them come from the year before the cutoff, so they don't leak future data.
+
+Two more checks use the same data:
+
+- **within each segment**: how well the chosen model ranks customers inside each segment
+- **rolling evaluation**: the baseline and both tree models, with each of the last four
+  months as the test month, to see how much the scores move from month to month
 
 A propensity score is used to rank customers (who to contact first) and as a
 probability (how many will respond), so both are measured on the test month:
@@ -64,11 +80,24 @@ probability (how many will respond), so both are measured on the test month:
 
 ## Results
 
+### Second version: extended features
+
+Not run yet. The plan, fixed before looking at any results:
+
+- The new features were chosen from what the first version's results suggested was
+  missing, not by trying features against the test month.
+- The model to register is chosen on the validation month (August 2011), as before.
+- The test month (September 2011) is looked at once, and the result is reported here
+  whether the new features help or not.
+- The first version's results below stay as they are, for comparison.
+
+### First version: base features
+
 From the pipeline on Databricks Free Edition (serverless), on the full dataset. The
 notebooks were first run one by one, then end to end as one Databricks job (four tasks,
 7 minutes 41 seconds).
 
-### Data
+#### Data
 
 | | |
 |---|---|
@@ -89,7 +118,7 @@ days is highest for the September cutoffs (0.58 in 2010, 0.50 in 2011) and lowes
 Christmas (0.33). The model trains on cutoffs up to July 2011, is calibrated
 and chosen on August 2011, and is tested on September 2011.
 
-### Segments
+#### Segments
 
 k-means with k from 2 to 8 and a Gaussian mixture were compared on the training months.
 k-means with k = 3 had the highest silhouette of all 14 options (0.32, against 0.23 for
@@ -105,7 +134,7 @@ at k = 3. Its BIC kept improving as k grew, which says little with this many row
 
 (shares and medians are over training snapshots, so a customer counts once per month they appear in)
 
-### Propensity models (test month: September 2011)
+#### Propensity models (test month: September 2011)
 
 | Target | Base rate | Model | ROC AUC | Avg. precision | Lift, top 10% | Calibration error (raw → isotonic) |
 |---|---|---|---|---|---|---|

@@ -6,10 +6,16 @@ model see the same customer's later behaviour while training, which flatters it.
 
 Candidates, from simplest up:
 - recent_orders: no model, rank customers by how many orders they placed in the last 90 days
-- logistic: logistic regression on log-scaled features
-- gbm: gradient-boosted trees on all features
-- gbm_segment: the same, with the customer's segment as an extra feature
-- gbm_per_segment: one model per segment
+- logistic, gbm: logistic regression and gradient-boosted trees on the first version's
+  features (BASE_COLUMNS), kept so the effect of the new features is visible
+- logistic_ext, gbm_ext: the same models on the extended features (EXTENDED_COLUMNS)
+- gbm_ext_segment: extended trees with the customer's segment as an extra feature
+- gbm_ext_per_segment: one extended model per segment
+
+Two more views of the same models:
+- metrics_by_segment: how well a model ranks customers within each segment
+- rolling_evaluation: the comparison repeated with each of the last few months as the
+  test month, so one unusual month doesn't decide the result
 
 A propensity score is used both to rank customers (who to contact first) and as a
 probability (expected uptake), so both are measured: ranking by ROC AUC, average
@@ -31,7 +37,7 @@ from sklearn.metrics import average_precision_score, brier_score_loss, roc_auc_s
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-from .snapshots import FEATURE_COLUMNS
+from .snapshots import BASE_COLUMNS, EXTENDED_COLUMNS
 
 
 def split_by_cutoff(df: pd.DataFrame, test_cutoffs: int = 1, valid_cutoffs: int = 1):
@@ -135,10 +141,16 @@ class Result:
     calibrator: IsotonicRegression | None = None
     test_scores: np.ndarray | None = field(default=None, repr=False)
     run_id: str | None = None  # set when the result is logged to MLflow
+    features: list[str] = field(default_factory=list)  # columns the model takes, for registering it
 
 
-def _features(df: pd.DataFrame) -> pd.DataFrame:
-    return df[FEATURE_COLUMNS].astype(float)
+def _features(df: pd.DataFrame, columns=BASE_COLUMNS) -> pd.DataFrame:
+    return df[list(columns)].astype(float)
+
+
+def _recent_orders(d: pd.DataFrame) -> np.ndarray:
+    """The no-model baseline: more recent orders, more likely to order again."""
+    return d["orders_90d"].to_numpy() + d["orders_365d"].to_numpy() / 100  # longer history breaks ties
 
 
 def compare_models(train: pd.DataFrame, valid: pd.DataFrame, test: pd.DataFrame, target: str,
@@ -147,34 +159,75 @@ def compare_models(train: pd.DataFrame, valid: pd.DataFrame, test: pd.DataFrame,
     ytr, yva, yte = (d[y_col].to_numpy() for d in (train, valid, test))
     results: list[Result] = []
 
-    def add(name, model, p_valid, p_test):
+    def add(name, model, p_valid, p_test, columns=()):
         iso = IsotonicRegression(out_of_bounds="clip").fit(p_valid, yva)
         results.append(Result(name, target, metrics(yte, p_test), metrics(yte, iso.predict(p_test)),
-                              metrics(yva, p_valid), model, iso, p_test))
+                              metrics(yva, p_valid), model, iso, p_test, features=list(columns)))
 
-    # no model: more recent orders, more likely to order again
-    def score(d):
-        return d["orders_90d"].to_numpy() + d["orders_365d"].to_numpy() / 100  # longer history breaks ties
+    add("recent_orders", None, _recent_orders(valid), _recent_orders(test))
 
-    add("recent_orders", None, score(valid), score(test))
-
-    for name, est in (("logistic", _logistic()), ("gbm", _gbm(seed))):
-        m = est.fit(_features(train), ytr)
-        add(name, m, m.predict_proba(_features(valid))[:, 1], m.predict_proba(_features(test))[:, 1])
+    for suffix, cols in (("", BASE_COLUMNS), ("_ext", EXTENDED_COLUMNS)):
+        for name, est in (("logistic", _logistic()), ("gbm", _gbm(seed))):
+            m = est.fit(_features(train, cols), ytr)
+            add(name + suffix, m, m.predict_proba(_features(valid, cols))[:, 1],
+                m.predict_proba(_features(test, cols))[:, 1], cols)
 
     if use_segments and "segment" in train:
         # one-hot over the segments of all three splits, so the columns line up
         segs = sorted(set(train["segment"]) | set(valid["segment"]) | set(test["segment"]))
 
         def seg_x(d):
-            return _features(d).assign(**{f"segment_{s}": (d["segment"] == s).astype(float) for s in segs})
-        m = _gbm(seed).fit(seg_x(train), ytr)
-        add("gbm_segment", m, m.predict_proba(seg_x(valid))[:, 1], m.predict_proba(seg_x(test))[:, 1])
+            return _features(d, EXTENDED_COLUMNS).assign(
+                **{f"segment_{s}": (d["segment"] == s).astype(float) for s in segs})
 
-        per = PerSegment(_gbm(seed)).fit(_features(train), ytr, train["segment"].to_numpy())
-        add("gbm_per_segment", per, per.predict_proba(_features(valid), valid["segment"].to_numpy()),
-            per.predict_proba(_features(test), test["segment"].to_numpy()))
+        m = _gbm(seed).fit(seg_x(train), ytr)
+        add("gbm_ext_segment", m, m.predict_proba(seg_x(valid))[:, 1], m.predict_proba(seg_x(test))[:, 1])
+
+        x = {k: _features(d, EXTENDED_COLUMNS) for k, d in (("train", train), ("valid", valid), ("test", test))}
+        per = PerSegment(_gbm(seed)).fit(x["train"], ytr, train["segment"].to_numpy())
+        add("gbm_ext_per_segment", per, per.predict_proba(x["valid"], valid["segment"].to_numpy()),
+            per.predict_proba(x["test"], test["segment"].to_numpy()))
     return results
+
+
+def metrics_by_segment(test: pd.DataFrame, scores: np.ndarray, target: str) -> pd.DataFrame:
+    """Ranking quality within each segment. A model can do well overall by ranking the
+    segments against each other while ranking poorly inside one of them."""
+    y = test[f"y_{target}"].to_numpy()
+    rows = []
+    for s in sorted(test["segment"].unique()):
+        m = (test["segment"] == s).to_numpy()
+        row = {"segment": s, "customers": int(m.sum()), "base_rate": float(y[m].mean())}
+        if len(np.unique(y[m])) == 2:  # AUC needs both outcomes
+            row.update({k: metrics(y[m], scores[m])[k] for k in ("roc_auc", "avg_precision", "lift_top10")})
+        rows.append(row)
+    return pd.DataFrame(rows).round(4)
+
+
+def rolling_evaluation(df: pd.DataFrame, target: str, months: int = 4, seed: int = 7) -> pd.DataFrame:
+    """Repeat the core comparison with each of the last `months` cutoffs as the test month.
+
+    For each test month, the month before it is held back as validation and all earlier
+    months train, as in the main comparison. No calibration or model choice happens here.
+    It only checks how much the ranking quality moves from month to month.
+    """
+    cutoffs = sorted(df["cutoff"].unique())
+    if len(cutoffs) < months + 2:
+        raise ValueError(f"need at least {months + 2} cutoffs for {months} test months")
+    rows = []
+    for test_cutoff in cutoffs[-months:]:
+        upto = df[df["cutoff"] <= test_cutoff]
+        train, _, test = split_by_cutoff(upto, 1, 1)
+        y_tr, y_te = train[f"y_{target}"].to_numpy(), test[f"y_{target}"].to_numpy()
+        scores = {"recent_orders": _recent_orders(test)}
+        for name, cols in (("gbm", BASE_COLUMNS), ("gbm_ext", EXTENDED_COLUMNS)):
+            m = _gbm(seed).fit(_features(train, cols), y_tr)
+            scores[name] = m.predict_proba(_features(test, cols))[:, 1]
+        for name, p in scores.items():
+            m = metrics(y_te, p)
+            rows.append({"target": target, "test_cutoff": test_cutoff, "model": name,
+                         **{k: m[k] for k in ("roc_auc", "avg_precision", "lift_top10", "base_rate")}})
+    return pd.DataFrame(rows).round(4)
 
 
 def results_table(results: list[Result]) -> pd.DataFrame:

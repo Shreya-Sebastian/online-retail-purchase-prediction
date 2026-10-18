@@ -15,7 +15,7 @@ sys.path.append(os.path.abspath("../src"))
 from pyspark.sql import functions as F
 
 from custprop.config import Config, monthly_cutoffs
-from custprop.snapshots import FEATURE_COLUMNS, cutoffs_frame, snapshots
+from custprop.snapshots import EXTENDED_COLUMNS, cutoffs_frame, snapshots
 
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "custprop")
@@ -48,4 +48,4 @@ display(
 
 # COMMAND ----------
 
-display(snaps.where(F.col("cutoff") == max(cutoffs)).select(*FEATURE_COLUMNS).summary("mean", "50%", "max"))
+display(snaps.where(F.col("cutoff") == max(cutoffs)).select(*EXTENDED_COLUMNS).summary("mean", "50%", "max"))

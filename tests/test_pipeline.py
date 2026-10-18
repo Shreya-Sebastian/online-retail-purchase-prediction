@@ -6,7 +6,7 @@ import pytest
 
 from custprop import propensity, segment
 from custprop.categories import category_of
-from custprop.clean import clean, clean_report
+from custprop.clean import clean, clean_report, prepare_raw_pandas
 from custprop.config import monthly_cutoffs
 from custprop.snapshots import FEATURE_COLUMNS, cutoffs_frame, features, labels, snapshots
 from custprop.synthetic import raw_transactions
@@ -124,3 +124,15 @@ def test_split_needs_enough_cutoffs():
     df = pd.DataFrame({"cutoff": [date(2011, 1, 1), date(2011, 2, 1)]})
     with pytest.raises(ValueError):
         propensity.split_by_cutoff(df)
+
+
+def test_mixed_type_text_columns_reach_spark(spark, raw_pdf):
+    # as in the real export: a numeric description, an empty one, a numeric stock code
+    pdf = raw_pdf.head(5).copy()
+    pdf["Description"] = pd.Series(["WHITE MUG", 21258, np.nan, 3.5, "BAG"], dtype=object)
+    pdf["StockCode"] = pd.Series(["85123A", 22423, "POST", 22423, "20725"], dtype=object)
+    with pytest.raises(Exception):
+        spark.createDataFrame(pdf)  # fails without prepare_raw_pandas, as on Databricks
+    rows = spark.createDataFrame(prepare_raw_pandas(pdf)).toPandas()
+    assert rows["Description"].tolist()[:3] == ["WHITE MUG", "21258", None]
+    assert rows["StockCode"].tolist()[1] == "22423"

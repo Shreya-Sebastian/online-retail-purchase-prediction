@@ -16,6 +16,9 @@ def spark():
          .config("spark.sql.shuffle.partitions", "4")
          .config("spark.sql.session.timeZone", "UTC")
          .config("spark.ui.enabled", "false")
+         # convert pandas through Arrow with no fallback, as Databricks does
+         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+         .config("spark.sql.execution.arrow.pyspark.fallback.enabled", "false")
          .getOrCreate())
     yield s
     s.stop()

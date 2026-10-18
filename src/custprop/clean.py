@@ -32,6 +32,26 @@ RAW_COLUMNS = {
 }
 
 
+TEXT_COLUMNS = ("Invoice", "StockCode", "Description", "Country")
+
+
+def prepare_raw_pandas(pdf):
+    """Make the Excel export safe to hand to Spark.
+
+    Excel cells in a text column are not always text: some descriptions and stock codes
+    are numbers, and empty cells come back as NaN. A pandas column mixing those can't be
+    converted to a Spark column, so every text column becomes one string type with real
+    missing values.
+    """
+    import pandas as pd
+
+    out = pdf.copy()
+    for col in TEXT_COLUMNS:
+        if col in out:
+            out[col] = out[col].map(lambda v: None if pd.isna(v) else str(v)).astype("string")
+    return out
+
+
 def rename_raw(raw: DataFrame) -> DataFrame:
     df = raw.select([F.col(f"`{src}`").alias(dst) for src, dst in RAW_COLUMNS.items()])
     # Read through pandas, a missing customer id is NaN, which Spark keeps as a number and

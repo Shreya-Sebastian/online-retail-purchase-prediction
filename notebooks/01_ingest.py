@@ -22,7 +22,7 @@ import sys
 
 sys.path.append(os.path.abspath("../src"))  # the package sits next to the notebooks in the Git folder
 
-from custprop.clean import clean, clean_report
+from custprop.clean import clean, clean_report, prepare_raw_pandas
 from custprop.config import DATA_URL, Config
 
 dbutils.widgets.text("catalog", "workspace")
@@ -52,7 +52,7 @@ print(xlsx, os.path.getsize(xlsx) // 1_000_000, "MB")
 import pandas as pd
 
 sheets = pd.read_excel(xlsx, sheet_name=None, dtype={"Invoice": str, "StockCode": str})
-raw_pdf = pd.concat(sheets.values(), ignore_index=True)
+raw_pdf = prepare_raw_pandas(pd.concat(sheets.values(), ignore_index=True))
 spark.createDataFrame(raw_pdf).write.mode("overwrite").option("overwriteSchema", "true") \
     .saveAsTable(cfg.table("raw_transactions"))
 print(f"{len(raw_pdf):,} raw rows from sheets {list(sheets)}")

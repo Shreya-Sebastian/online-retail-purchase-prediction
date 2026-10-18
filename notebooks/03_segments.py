@@ -24,7 +24,7 @@ dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "custprop")
 cfg = Config(catalog=dbutils.widgets.get("catalog"), schema=dbutils.widgets.get("schema"))
 
-snaps = spark.table(cfg.table("snapshots")).toPandas()
+snaps = spark.table(cfg.table("snapshots")).orderBy("cutoff", "customer_id").toPandas()  # fixed row order, so reruns match
 train, valid, test = split_by_cutoff(snaps, cfg.test_cutoffs, cfg.valid_cutoffs)
 print(len(train), len(valid), len(test), "snapshot rows in train / valid / test")
 

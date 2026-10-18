@@ -64,13 +64,25 @@ class Segmenter:
     method: str
     k: int
     pipeline: Pipeline
+    order: np.ndarray  # cluster id from the model -> segment number
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
-        return self.pipeline.predict(_matrix(df))
+        return self.order[self.pipeline.predict(_matrix(df))]
 
 
 def fit(df: pd.DataFrame, method: str, k: int, seed: int = 7) -> Segmenter:
-    return Segmenter(method, k, _pipeline(method, k, seed).fit(_matrix(df)))
+    """Fit, then number segments by median recency, most recent first.
+
+    The model's own cluster ids depend on row order, which Spark doesn't fix, so the same
+    segments could come back with different numbers from one run to the next.
+    """
+    pipeline = _pipeline(method, k, seed).fit(_matrix(df))
+    raw = pipeline.predict(_matrix(df))
+    recency = pd.Series(df["recency_days"].to_numpy()).groupby(raw).median().reindex(range(k))
+    ranked = recency.fillna(np.inf).sort_values(kind="stable").index.to_numpy()
+    order = np.empty(k, dtype=int)
+    order[ranked] = np.arange(k)
+    return Segmenter(method, k, pipeline, order)
 
 
 def profile(df: pd.DataFrame, segments: np.ndarray, extra: list[str] | None = None) -> pd.DataFrame:

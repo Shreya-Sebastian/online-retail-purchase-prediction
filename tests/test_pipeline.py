@@ -119,6 +119,11 @@ def test_end_to_end(spark, txns):
     table = segment.compare(train, ks=range(2, 4))
     assert set(table["method"]) == {"kmeans", "gmm"} and table["silhouette"].notna().all()
     seg = segment.fit(train, "kmeans", 3)
+    # numbered by recency, so row order doesn't change which segment gets which number
+    labels_ = seg.predict(train)
+    assert train.groupby(labels_)["recency_days"].median().is_monotonic_increasing
+    reshuffled = segment.fit(train.sample(frac=1, random_state=1), "kmeans", 3)
+    assert (reshuffled.predict(train) == labels_).mean() > 0.99
     for d in (train, valid, test):
         d["segment"] = seg.predict(d)
     assert segment.profile(train, train["segment"].to_numpy())["share"].sum() == pytest.approx(1)

@@ -82,7 +82,7 @@ probability (how many will respond), so both are measured on the test month:
 
 ### Second version: extended features
 
-Not run yet. The plan, fixed before looking at any results:
+The plan, fixed before the run:
 
 - The new features were chosen from what the first version's results suggested was
   missing, not by trying features against the test month.
@@ -90,6 +90,63 @@ Not run yet. The plan, fixed before looking at any results:
 - The test month (September 2011) is looked at once, and the result is reported here
   whether the new features help or not.
 - The first version's results below stay as they are, for comparison.
+
+**The new features did not make the trees better.** Seasonality, regularity, trend and
+category recency added nothing the trees could not already get from recency, frequency,
+spend and category shares. Logistic regression gained a little, and the trees'
+probabilities came out somewhat better calibrated.
+
+Test month, September 2011:
+
+| Target | Model | Base features: ROC AUC / avg. precision / calibration error | Extended features |
+|---|---|---|---|
+| any purchase | logistic regression | 0.764 / 0.782 / 0.070 | 0.767 / 0.785 / 0.065 |
+| | boosted trees | 0.770 / 0.791 / 0.057 | 0.767 / 0.790 / 0.048 |
+| kitchen | logistic regression | 0.767 / 0.732 / 0.054 | 0.769 / 0.737 / 0.050 |
+| | boosted trees | 0.778 / 0.751 / 0.044 | 0.778 / 0.751 / 0.034 |
+| bags | logistic regression | 0.806 / 0.660 / 0.034 | 0.814 / 0.676 / 0.033 |
+| | boosted trees | 0.826 / 0.699 / 0.037 | 0.825 / 0.702 / 0.022 |
+
+(calibration error is before isotonic calibration)
+
+The segment variants, now on the extended features, again scored the same as the plain
+trees, within 0.007 ROC AUC. On the validation month the extended trees were chosen for any
+purchase and kitchen, and the base trees for bags.
+
+**Rolling evaluation.** The same comparison with each of June, July, August and September
+2011 as the test month. ROC AUC, mean and range over the four months:
+
+| Target | Recent orders (no model) | Boosted trees, base | Boosted trees, extended |
+|---|---|---|---|
+| any purchase | 0.771 (0.747 to 0.783) | 0.794 (0.770 to 0.807) | 0.794 (0.767 to 0.810) |
+| kitchen | 0.761 (0.727 to 0.784) | 0.796 (0.778 to 0.810) | 0.797 (0.778 to 0.812) |
+| bags | 0.753 (0.715 to 0.776) | 0.842 (0.826 to 0.852) | 0.842 (0.825 to 0.856) |
+
+- The trees beat the baseline in every month. The margin was 0.02 for any purchase, 0.03
+  to 0.05 for kitchen, and 0.08 to 0.11 for bags.
+- The difference between base and extended features was never more than 0.003 in either
+  direction.
+- September was the hardest of the four months for every model. The single-month test in
+  the first version was a little pessimistic, not flattering.
+
+**Within each segment** (September 2011, the model chosen for each target):
+
+| Segment | Customers | Bought again (any) | ROC AUC: any / kitchen / bags |
+|---|---|---|---|
+| Active regulars | 1,683 | 0.75 | 0.75 / 0.75 / 0.81 |
+| Occasional or lapsing | 2,462 | 0.34 | 0.64 / 0.65 / 0.73 |
+| High-return | 179 | 0.32 | 0.67 / 0.73 / 0.80 |
+
+Ranking customers within a segment is harder than ranking all of them together. Part of
+the overall ROC AUC comes from telling the groups apart. The model is weakest inside the
+largest group, the occasional or lapsing buyers, probably because most of them have only
+one or two orders to go on. The high-return group is small (179 customers), so its numbers
+are rough.
+
+Two fixes came out of this run. Spark returns rows in no fixed order, so the trees came out
+slightly different on a rerun (ROC AUC 0.770 against 0.772 for any purchase), and k-means
+could give the same segments different numbers. The notebooks now sort rows before
+modelling, and segments are numbered by recency, most recent first.
 
 ### First version: base features
 
@@ -175,9 +232,10 @@ validation month.
 
 ### Limitations
 
-- One test month. September is in the pre-Christmas season, and validation AUC (August)
-  was higher than test AUC by 0.015 to 0.05, depending on the model. A rolling evaluation over several months would
-  give a better estimate.
+- The first version used one test month. September is in the pre-Christmas season, and
+  validation AUC (August) was higher than test AUC by 0.015 to 0.05, depending on the
+  model. The rolling evaluation in the second version covers four months, all from one
+  year, so it still can't show year-to-year changes.
 - Snapshots before December 2010 have less than a year of history, because the data
   starts in December 2009. Those months have fewer and more recently active customers,
   and their year-long features are cut short.

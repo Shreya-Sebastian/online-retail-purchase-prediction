@@ -31,7 +31,7 @@ dbutils.widgets.text("schema", "custprop")
 dbutils.widgets.text("register", "true")
 cfg = Config(catalog=dbutils.widgets.get("catalog"), schema=dbutils.widgets.get("schema"))
 
-snaps = spark.table(cfg.table("snapshots_segmented")).toPandas()
+snaps = spark.table(cfg.table("snapshots_segmented")).orderBy("cutoff", "customer_id").toPandas()  # fixed row order, so reruns match
 train, valid, test = split_by_cutoff(snaps, cfg.test_cutoffs, cfg.valid_cutoffs)
 mlflow.set_registry_uri("databricks-uc")
 mlflow.set_experiment(f"/Users/{spark.sql('select current_user()').first()[0]}/custprop")

@@ -2,9 +2,10 @@
 # MAGIC %md
 # MAGIC # 03 Customer segments
 # MAGIC
-# MAGIC Compares k-means and a Gaussian mixture over a range of k, on training cutoffs only. The choice of
-# MAGIC method and k is made here by hand from the table below and recorded in the widgets, so it is visible
-# MAGIC and repeatable. Writes `snapshots_segmented` and logs the segmenter to MLflow.
+# MAGIC Compares k-means and a Gaussian mixture over a range of k, on training cutoffs only. The method and
+# MAGIC k are chosen by hand from the comparison table and fixed in `Config` (`segment_method`, `segment_k`),
+# MAGIC with the reasoning, so the job reproduces the choice. Writes `snapshots_segmented` and logs the
+# MAGIC segmenter to MLflow.
 
 # COMMAND ----------
 
@@ -21,8 +22,6 @@ from custprop.propensity import split_by_cutoff
 
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "custprop")
-dbutils.widgets.dropdown("method", "kmeans", ["kmeans", "gmm"])
-dbutils.widgets.text("k", "4")
 cfg = Config(catalog=dbutils.widgets.get("catalog"), schema=dbutils.widgets.get("schema"))
 
 snaps = spark.table(cfg.table("snapshots")).toPandas()
@@ -37,12 +36,13 @@ display(table)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Pick a method and k that balance separation (silhouette, BIC) with stability across seeds and no tiny
-# MAGIC segments, then set the widgets above. The profile shows whether the segments are interpretable.
+# MAGIC `Config` fixes k-means with k = 3, chosen from this table for its separation, its stability across seeds
+# MAGIC and no segment under 5%. The profile shows whether the segments are interpretable.
 
 # COMMAND ----------
 
-method, k = dbutils.widgets.get("method"), int(dbutils.widgets.get("k"))
+method, k = cfg.segment_method, cfg.segment_k
+print("fitting", method, "with k =", k)
 seg = segment.fit(train, method, k, cfg.seed)
 display(segment.profile(train, seg.predict(train), extra=["share_kitchen", "share_bags", "share_christmas"]).reset_index())
 

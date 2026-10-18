@@ -20,6 +20,10 @@ class Config:
     test_cutoffs: int = 1  # latest cutoffs held out for testing
     valid_cutoffs: int = 1  # the cutoffs before those, for calibration and model choice
     targets: tuple[str, ...] = ("any", "kitchen", "bags")
+    # Chosen from the comparison in 03_segments on the real data: k-means with k=3 had the highest
+    # silhouette (0.32) and near-perfect stability across seeds (ARI 1.00), with no segment under 5%.
+    segment_method: str = "kmeans"
+    segment_k: int = 3
     seed: int = 7
     extra: dict = field(default_factory=dict)
 

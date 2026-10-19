@@ -110,7 +110,7 @@ written here and committed before running them. Each will be reported as support
 
 #### What happened
 
-Two parts were supported. Three were not.
+Three parts were supported and four were not.
 
 | Prediction | Result | Verdict |
 |---|---|---|

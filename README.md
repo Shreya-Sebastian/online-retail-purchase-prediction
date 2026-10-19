@@ -108,6 +108,44 @@ written here and committed before running them. Each will be reported as support
    for every target. The extended features help these customers more than they help all
    customers, for at least two of the three targets.
 
+#### What happened
+
+Two parts were supported. Three were not.
+
+| Prediction | Result | Verdict |
+|---|---|---|
+| 1. All training months beat the most recent month by at least 0.01 ROC AUC | One month scored the same as all 17: any purchase 0.777 against 0.772, kitchen 0.777 against 0.778, bags 0.822 against 0.827 | not supported |
+| 2a. Recency or frequency matters most for any purchase | Regularity (drop 0.027), breadth (0.022) and spend (0.016) came first; recency and frequency each dropped it by about 0.003 | not supported |
+| 2b. Category features are in the top two for bags | Category recency (0.063) and category shares (0.046) were the top two | supported |
+| 3a. Segments raise logistic regression's ROC AUC | Unchanged to four decimals for all three targets | not supported |
+| 3b. Segments change the base trees by less than 0.005 | Changes of 0.001 or less | supported |
+| 4a. The trees lead the baseline by more on one-order customers | The lead roughly doubled: any purchase 0.046 against 0.025, kitchen 0.096 against 0.051, bags 0.164 against 0.112 | supported |
+| 4b. The extended features help one-order customers more, for two of three targets | Only for bags (+0.005); any purchase −0.005, kitchen −0.015 | not supported |
+
+(one-order customers: 1,578 of the 4,324 in the test month; all scores are ROC AUC on September 2011)
+
+What this changes:
+
+- **More history did not help.** The most recent training month alone has about 4,300
+  customers, and that was enough. The trees learned as much from it as from all 17 months.
+  For any purchase, the full set scored slightly lower. That could be because the early
+  months have less than a year of history, but I did not test this.
+- **A model relying on a feature is not the same as the feature adding value.** The
+  extended trees lean on regularity more than on anything else for any purchase, yet adding
+  regularity did not raise their score in the second version. The groups overlap: a regular
+  customer is also a recent and frequent one. When one group is shuffled, the model can
+  partly fall back on the others. That is also why recency looks unimportant here, when on
+  its own it is a strong predictor (the baseline is built on it).
+- **The bags explanation now has evidence.** What a customer bought before, through category
+  recency and category shares, is what the bags model depends on most.
+- **Segments add nothing to logistic regression either.** The segments are k-means clusters
+  in the same log-scaled space the logistic regression works in. Boundaries between such
+  clusters are straight lines, which the model can already draw. This is my explanation for
+  the result, not something I tested.
+- **The model matters most where there is least history.** For customers with one order,
+  the order-count baseline can hardly rank them (ROC AUC 0.55 to 0.56). The trees' lead over
+  it about doubles there.
+
 ### Second version: extended features
 
 The plan, fixed before the run:
@@ -238,9 +276,10 @@ What the numbers say:
 - **Whether a customer buys again is mostly explained by recent activity.** Counting
   recent orders already reaches an AUC of 0.75, and boosted trees add 0.025.
 - **The models help most for category purchases.** For bags, the trees reach
-  0.83 against 0.72 for the baseline, and average precision rises from 0.51 to 0.70. A
-  likely reason is that the models see what a customer bought before (their share of spend
-  per category), while the baseline only counts orders. I did not test this directly.
+  0.83 against 0.72 for the baseline, and average precision rises from 0.51 to 0.70. The
+  models see what a customer bought before (their share of spend per category), while the
+  baseline only counts orders. The feature importance check in the third version supports
+  this: category recency and category shares matter most for bags.
   Kitchen purchases are almost as common as any purchase (0.43 against 0.50 in the test
   month), so that target behaves much like the first one.
 - **Segments did not improve the predictions.** Adding the segment as a feature changed

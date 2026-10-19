@@ -131,7 +131,7 @@ def test_end_to_end(spark, txns):
     results = propensity.compare_models(train, valid, test, "any")
     names = [r.name for r in results]
     assert names == ["recent_orders", "logistic", "gbm", "logistic_ext", "gbm_ext",
-                     "gbm_ext_segment", "gbm_ext_per_segment"]
+                     "logistic_segment", "gbm_segment", "gbm_ext_segment", "gbm_ext_per_segment"]
     by_name = {r.name: r for r in results}
     assert len(by_name["gbm_ext"].features) > len(by_name["gbm"].features)
     out = propensity.results_table(results)
@@ -141,6 +141,22 @@ def test_end_to_end(spark, txns):
     seg = propensity.metrics_by_segment(test, by_name["gbm_ext"].test_scores, "any")
     assert seg["customers"].sum() == len(test)
     assert set(seg["segment"]) == set(test["segment"])
+
+    one_order = (test["orders_365d"] == 1).to_numpy()
+    sub = propensity.metrics_on_subset(results, test, one_order, "any")
+    assert len(sub) == len(results) and (sub["customers"] == one_order.sum()).all()
+
+    curve = propensity.learning_curve(train, test, "any", months=(1, 2, None))
+    assert curve["train_months"].tolist() == [1, 1, 2, 2, train["cutoff"].nunique(), train["cutoff"].nunique()]
+    assert curve["train_rows"].is_monotonic_increasing
+
+    ext = by_name["gbm_ext"]
+    imp = propensity.group_importance(ext.model, test, ext.features, "any", repeats=2)
+    assert set(imp["group"]) == set(propensity.FEATURE_GROUPS)
+    assert imp["auc_drop"].is_monotonic_decreasing
+    # groups whose features the model doesn't take (the extended ones, for the base model) are skipped
+    base_only = propensity.group_importance(by_name["gbm"].model, test, by_name["gbm"].features, "any", repeats=1)
+    assert "trend" not in set(base_only["group"])
 
     rolling = propensity.rolling_evaluation(snaps, "any", months=3)
     assert rolling["test_cutoff"].nunique() == 3

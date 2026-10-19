@@ -53,6 +53,7 @@ For each target the same comparison is run:
 - **logistic**, **gbm**: logistic regression on log-scaled features, and gradient-boosted
   trees, both on the base features (recency, frequency, spend, returns, category shares)
 - **logistic_ext**, **gbm_ext**: the same two models on the extended features (below)
+- **logistic_segment**, **gbm_segment**: base features plus the segment
 - **gbm_ext_segment**: extended trees with the segment as a feature
 - **gbm_ext_per_segment**: one extended model per segment
 
@@ -65,11 +66,17 @@ The extended features add information the segments don't contain:
 
 All of them come from the year before the cutoff, so they don't leak future data.
 
-Two more checks use the same data:
+More checks use the same data:
 
 - **within each segment**: how well the chosen model ranks customers inside each segment
+- **one-order customers**: every model on the test-month customers with a single order in
+  the past year
 - **rolling evaluation**: the baseline and both tree models, with each of the last four
   months as the test month, to see how much the scores move from month to month
+- **learning curve**: the trees trained on only the most recent 1, 2, 4, 8 or all
+  training months
+- **feature group importance**: the drop in test ROC AUC when one group of features is
+  shuffled across customers, for the extended trees
 
 A propensity score is used to rank customers (who to contact first) and as a
 probability (how many will respond), so both are measured on the test month:
@@ -79,6 +86,27 @@ probability (how many will respond), so both are measured on the test month:
   isotonic calibration fitted on the validation month
 
 ## Results
+
+### Third version: predictions written before the run
+
+In the second version the new features made no difference to the trees. These four checks are set up where a difference is expected, with the expected outcome
+written here and committed before running them. Each will be reported as supported or not.
+
+1. **Learning curve.** For every target, the trees trained on all training months score
+   at least 0.01 ROC AUC higher than trees trained on the most recent month only. The gain
+   from 8 months to all months is smaller than the gain from 1 month to 2.
+2. **Feature group importance** (extended trees, test month). For any purchase, the
+   largest drop in ROC AUC comes from shuffling recency or frequency. For bags, category
+   shares or category recency is among the two largest drops. If so, this supports the
+   explanation for the bags result in the first version, which so far is only a likely
+   reason.
+3. **Segments in a linear model.** Adding the segment raises logistic regression's test ROC
+   AUC for every target, and changes the base trees' ROC AUC by less than 0.005. A linear
+   model can't find these groups itself, and the trees can.
+4. **One-order customers.** On test-month customers with one order in the past year, the
+   gap between the base trees and the order-count baseline is larger than on all customers,
+   for every target. The extended features help these customers more than they help all
+   customers, for at least two of the three targets.
 
 ### Second version: extended features
 

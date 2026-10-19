@@ -9,13 +9,18 @@ Candidates, from simplest up:
 - logistic, gbm: logistic regression and gradient-boosted trees on the first version's
   features (BASE_COLUMNS), kept so the effect of the new features is visible
 - logistic_ext, gbm_ext: the same models on the extended features (EXTENDED_COLUMNS)
+- logistic_segment, gbm_segment: base features plus the customer's segment, to see whether
+  segments help a linear model that can't find groups by itself, and the trees that can
 - gbm_ext_segment: extended trees with the customer's segment as an extra feature
 - gbm_ext_per_segment: one extended model per segment
 
-Two more views of the same models:
+More views of the same data:
 - metrics_by_segment: how well a model ranks customers within each segment
+- metrics_on_subset: every model on a subset of the test month (customers with one order)
 - rolling_evaluation: the comparison repeated with each of the last few months as the
   test month, so one unusual month doesn't decide the result
+- learning_curve: the trees trained on only the most recent 1, 2, 4, 8 or all months
+- group_importance: how much ranking quality drops when one group of features is shuffled
 
 A propensity score is used both to rank customers (who to contact first) and as a
 probability (expected uptake), so both are measured: ranking by ROC AUC, average
@@ -176,12 +181,14 @@ def compare_models(train: pd.DataFrame, valid: pd.DataFrame, test: pd.DataFrame,
         # one-hot over the segments of all three splits, so the columns line up
         segs = sorted(set(train["segment"]) | set(valid["segment"]) | set(test["segment"]))
 
-        def seg_x(d):
-            return _features(d, EXTENDED_COLUMNS).assign(
-                **{f"segment_{s}": (d["segment"] == s).astype(float) for s in segs})
+        def seg_x(d, cols):
+            return _features(d, cols).assign(**{f"segment_{s}": (d["segment"] == s).astype(float) for s in segs})
 
-        m = _gbm(seed).fit(seg_x(train), ytr)
-        add("gbm_ext_segment", m, m.predict_proba(seg_x(valid))[:, 1], m.predict_proba(seg_x(test))[:, 1])
+        for name, est, cols in (("logistic_segment", _logistic(), BASE_COLUMNS),
+                                ("gbm_segment", _gbm(seed), BASE_COLUMNS),
+                                ("gbm_ext_segment", _gbm(seed), EXTENDED_COLUMNS)):
+            m = est.fit(seg_x(train, cols), ytr)
+            add(name, m, m.predict_proba(seg_x(valid, cols))[:, 1], m.predict_proba(seg_x(test, cols))[:, 1])
 
         x = {k: _features(d, EXTENDED_COLUMNS) for k, d in (("train", train), ("valid", valid), ("test", test))}
         per = PerSegment(_gbm(seed)).fit(x["train"], ytr, train["segment"].to_numpy())
@@ -239,3 +246,73 @@ def results_table(results: list[Result]) -> pd.DataFrame:
                     "valid_roc_auc": r.valid["roc_auc"]})
         rows.append(row)
     return pd.DataFrame(rows).round(4)
+
+
+def metrics_on_subset(results: list[Result], test: pd.DataFrame, mask: np.ndarray, target: str) -> pd.DataFrame:
+    """Every model's test-month ranking quality on a subset of customers."""
+    y = test[f"y_{target}"].to_numpy()[mask]
+    rows = []
+    for r in results:
+        m = metrics(y, r.test_scores[mask])
+        rows.append({"target": target, "model": r.name, "customers": int(mask.sum()),
+                     **{k: m[k] for k in ("roc_auc", "avg_precision", "lift_top10", "base_rate")}})
+    return pd.DataFrame(rows).round(4)
+
+
+def learning_curve(train: pd.DataFrame, test: pd.DataFrame, target: str, months=(1, 2, 4, 8, None),
+                   seed: int = 7) -> pd.DataFrame:
+    """Trees trained on only the most recent `n` training months (None: all of them)."""
+    cutoffs = sorted(train["cutoff"].unique())
+    y_te = test[f"y_{target}"].to_numpy()
+    rows = []
+    for n in months:
+        keep = cutoffs if n is None else cutoffs[-n:]
+        part = train[train["cutoff"].isin(keep)]
+        for name, cols in (("gbm", BASE_COLUMNS), ("gbm_ext", EXTENDED_COLUMNS)):
+            m = _gbm(seed).fit(_features(part, cols), part[f"y_{target}"].to_numpy())
+            met = metrics(y_te, m.predict_proba(_features(test, cols))[:, 1])
+            rows.append({"target": target, "model": name, "train_months": len(keep), "train_rows": len(part),
+                         **{k: met[k] for k in ("roc_auc", "avg_precision")}})
+    return pd.DataFrame(rows).round(4)
+
+
+FEATURE_GROUPS = {
+    "recency": ["recency_days"],
+    "frequency": ["orders_30d", "orders_90d", "orders_365d"],
+    "spend": ["spend_30d", "spend_90d", "spend_365d", "avg_order_value", "items"],
+    "breadth": ["distinct_products", "tenure_days"],
+    "returns": ["return_line_share"],
+    "category_shares": [c for c in BASE_COLUMNS if c.startswith("share_")],
+    "context": ["is_uk", "cutoff_month"],
+    "trend": ["orders_prev_90d", "spend_prev_90d"],
+    "seasonality": ["orders_same_window_last_year", "spend_same_window_last_year"],
+    "regularity": ["gap_mean_days", "gap_cv"],
+    "category_recency": [c for c in EXTENDED_COLUMNS if c.startswith("days_since_")],
+}
+
+
+def group_importance(model, test: pd.DataFrame, columns, target: str, groups=FEATURE_GROUPS,
+                     repeats: int = 5, seed: int = 7) -> pd.DataFrame:
+    """Drop in test ROC AUC when a group of features is shuffled together across customers.
+
+    Shuffling a whole group at once keeps related features (orders over 30, 90 and 365 days)
+    from standing in for each other, which happens when they are shuffled one at a time.
+    """
+    columns = list(columns)
+    x = _features(test, columns)
+    y = test[f"y_{target}"].to_numpy()
+    base = roc_auc_score(y, model.predict_proba(x)[:, 1])
+    rng = np.random.default_rng(seed)
+    rows = []
+    for group, cols in groups.items():
+        cols = [c for c in cols if c in columns]
+        if not cols:
+            continue
+        drops = []
+        for _ in range(repeats):
+            shuffled = x.copy()
+            shuffled[cols] = x[cols].to_numpy()[rng.permutation(len(x))]
+            drops.append(base - roc_auc_score(y, model.predict_proba(shuffled)[:, 1]))
+        rows.append({"target": target, "group": group, "features": len(cols),
+                     "auc_drop": float(np.mean(drops)), "auc_drop_sd": float(np.std(drops))})
+    return pd.DataFrame(rows).sort_values("auc_drop", ascending=False).round(4).reset_index(drop=True)

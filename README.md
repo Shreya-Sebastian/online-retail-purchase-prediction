@@ -1,313 +1,151 @@
 # online-retail-purchase-prediction
 
-Customer segmentation and purchase prediction on Databricks, using two years of
-transactions from a UK online gift shop (Online Retail II, UCI).
+Customer segmentation and purchase prediction on Databricks, using two years of real
+transactions from a UK online gift shop (Online Retail II, UCI): about a million rows and
+5,875 customers after cleaning.
 
-The questions:
+The aim is to rank customers by how likely they are to buy again in the next 90 days, or to
+buy from a given product category (kitchen, bags), and to estimate how many will.
 
-- Which groups of customers are there, going by how recently, how often and how much they buy?
-- Who is likely to buy again in the next 90 days, and who is likely to buy from a given
-  product category (kitchen, bags)?
-- Does knowing a customer's segment improve those predictions?
+## Key findings
+
+- **The models beat a simple order-count rule in every month tested.** Over four test months
+  (June to September 2011), boosted trees reached a ROC AUC of 0.84 for bag purchases,
+  against 0.75 for ranking customers by their recent orders. Average precision rose from
+  0.50 to 0.69.
+- **The largest gain is for category purchases, and it comes from purchase history in that
+  category.** Shuffling a customer's category history costs the bags model more than any
+  other feature group, while the order-count rule has no access to it.
+- **The model adds most where customers have least history.** Among customers with a
+  single order in the past year (about a third of the test month), the order-count rule
+  can hardly rank anyone (ROC AUC 0.55 to 0.56). There the trees' lead over it is 1.5 to
+  1.9 times as large as over all customers, reaching 0.16 ROC AUC for bags.
+- **The probabilities can be used as they are.** After calibration on the validation
+  month, the trees' expected calibration error was below 0.05 for every target, so the
+  scores also estimate how many customers will buy.
+- **One month of history is enough to train on.** Trees trained on the most recent month
+  alone (about 4,300 customers) scored the same as trees trained on all 17 months, which
+  keeps retraining cheap.
+- **Three interpretable customer segments**, chosen from 14 candidate models: active
+  regulars (40%), occasional or lapsing buyers (55%) and a small high-return group (5%).
+- **It runs end to end as a Databricks job:** PySpark cleaning into Delta tables in Unity
+  Catalog, MLflow tracking for every model, the best model per target registered in Unity
+  Catalog, and tests for the data logic.
+
+Detailed tables are in [docs/results.md](docs/results.md).
+
+## How it was evaluated
+
+These rules were set at the start and kept for every experiment:
+
+- **No leakage.** Features for a cutoff use only the year before it, and labels only the 90
+  days from the cutoff on. Tests check the boundary, including a purchase on the cutoff day
+  itself.
+- **Split by time, not at random.** Models train on earlier months, are chosen and
+  calibrated on the next month, and are tested on the month after that, the way they would
+  be used.
+- **A baseline first.** Every model is compared with ranking customers by their recent
+  orders, so any gain is measured against something a business could do without a model.
+- **Both uses of a score are measured.** Ranking (ROC AUC, average precision, lift in the
+  top 10%) for deciding who to contact, and calibration (Brier score, calibration error)
+  for estimating how many will respond.
+- **Choices are made on the validation month.** The test month is only used to report.
+
+## How the work developed
+
+The project went through three rounds, each set up by what the previous one showed.
+
+1. **Baseline comparison.** Logistic regression and boosted trees against the order-count
+   rule, for any purchase, kitchen and bags. The trees were best for every target, with a
+   modest gain for any purchase and a large one for bags. Segments were compared as an
+   extra feature and as one model per segment.
+2. **Testing what the model might be missing.** Four groups of features were added that the
+   segments don't contain: seasonality, regularity of orders, trend and category recency.
+   The comparison was repeated over four test months instead of one, and per segment.
+3. **Predictions written down before running.** Four further checks were set up where a
+   difference was expected, with the expected outcome committed before the run: a learning
+   curve, feature group importance, segments in a linear model, and customers with a single
+   order. Three of the seven predicted outcomes held, and the rest changed the picture, as
+   described below.
+
+## What did not help, and what that shows
+
+- **The extra features did not improve the trees.** Seasonality, regularity, trend and
+  category recency changed their ROC AUC by at most 0.003 in any of twelve month and target
+  combinations. Logistic regression gained a little (bags 0.806 to 0.814). The trees
+  already got the same information from recency, frequency, spend and category shares.
+- **A feature the model relies on is not necessarily one that adds value.** The extended
+  trees rely on regularity more than on anything else for any purchase, yet adding it did
+  not raise their score. The feature groups overlap, so when one is shuffled the model can
+  partly fall back on another.
+- **Segments describe customers but do not improve predictions.** Adding the segment
+  changed no model's ROC AUC by more than 0.007, including logistic regression. The segments
+  are built from the same features the models use. Within each segment the model is weakest
+  for the occasional or lapsing buyers (ROC AUC 0.64 for any purchase), who have the least
+  history to go on.
+- **More history did not help.** This was predicted the other way, and is listed among the
+  findings above.
+
+## Limitations
+
+- All test months fall within one year (June to September 2011, summer and early autumn),
+  so the results can't show how the models hold up from one year to the next.
+- Snapshots before December 2010 have less than a year of history, because the data starts
+  in December 2009. Those months have fewer, more recently active customers.
+- Categories come from keyword rules on item descriptions, and 28% of spend falls under
+  "other".
+- Customers without an id (23% of rows) are left out entirely.
+- The explanations for why segments and extra features did not help are my reading of the
+  results, not separately tested.
+
+## Next steps
+
+1. **Better categories.** Group products by their descriptions with text embeddings
+   instead of keywords, to cover the 28% of spend now in "other".
+2. **Product-level features for one-order customers,** where the model adds most and has
+   least to go on: what was in their one basket.
+3. **Batch scoring.** A scheduled job that scores current customers into a Delta table,
+   with a check on how the score distribution moves from month to month.
+4. **A second dataset,** to see whether the findings hold for another shop.
 
 ## Pipeline
 
-Four notebooks, run in order. They were run one by one and then as one Databricks job set up in
-the UI. `databricks.yml` defines the same job as an Asset Bundle, but that file has not been
-deployed or tested.
+Four notebooks, run in order. They were run one by one and then as one Databricks job set
+up in the UI. `databricks.yml` defines the same job as an Asset Bundle, but that file has
+not been deployed or tested.
 
 | Notebook | Writes | What it does |
 |---|---|---|
 | `01_ingest` | `raw_transactions`, `transactions` | Downloads the data to a Unity Catalog volume, stacks both yearly sheets, cleans them into Delta tables |
 | `02_snapshots` | `snapshots` | One row per customer per monthly cutoff: features from the year before, labels from the 90 days after |
 | `03_segments` | `snapshots_segmented` | Compares k-means and a Gaussian mixture, fits the chosen one on training months, logs it to MLflow |
-| `04_propensity` | MLflow runs, registered models | Trains and compares the propensity models per target and registers the better of logistic regression and boosted trees in Unity Catalog |
+| `04_propensity` | MLflow runs, registered models | Trains and compares the models per target, runs the further checks and registers the best model per target in Unity Catalog |
 
-The logic lives in `src/custprop` so it can be tested outside Databricks. The
-notebooks only load data, call it, and log the results.
+The logic lives in `src/custprop` so it can be tested outside Databricks. The notebooks
+only load data, call it, and log the results.
 
 ### Cleaning
 
-The raw export mixes purchases with other things. Cancellations (invoice numbers
-starting with C) are kept and flagged as returns, because the return rate is a
-feature. Rows without a customer id, non-product codes (postage, bank charges,
-manual adjustments) and zero or negative prices are dropped. The notebook reports how many
-rows each rule matches. The counts overlap.
+The raw export mixes purchases with other things. Cancellations (invoice numbers starting
+with C) are kept and flagged as returns, because the return rate is a feature. Rows without
+a customer id, non-product codes (postage, bank charges, manual adjustments) and zero or
+negative prices are dropped. The notebook reports how many rows each rule matches. The
+counts overlap.
 
-The data has no product hierarchy, so categories come from keyword rules on the item
-description. The notebook shows how much of the spend they cover.
-
-### Snapshots and leakage
-
-Features for a cutoff only use transactions before that date, and labels only use the
-90 days from the cutoff on. A purchase on the cutoff day itself counts as the future.
-The tests check this boundary. The training, validation and test sets are split by
-cutoff month, not at random. Otherwise the model would train on a customer's later
-behaviour and be tested on their earlier behaviour, which flatters it.
-
-### Models and evaluation
+### Models
 
 For each target the same comparison is run:
 
 - **recent_orders**: no model, rank by number of orders in the last 90 days
 - **logistic**, **gbm**: logistic regression on log-scaled features, and gradient-boosted
   trees, both on the base features (recency, frequency, spend, returns, category shares)
-- **logistic_ext**, **gbm_ext**: the same two models on the extended features (below)
-- **logistic_segment**, **gbm_segment**: base features plus the segment
-- **gbm_ext_segment**: extended trees with the segment as a feature
+- **logistic_ext**, **gbm_ext**: the same two models on the extended features (seasonality,
+  regularity, trend, category recency)
+- **logistic_segment**, **gbm_segment**, **gbm_ext_segment**: with the segment as a feature
 - **gbm_ext_per_segment**: one extended model per segment
 
-The extended features add information the segments don't contain:
-
-- seasonality: orders and spend in the same 90-day window one year earlier
-- regularity: the mean gap between order days, and how much the gaps vary
-- trend: orders and spend in the 90 days before the last 90
-- category recency: days since the last purchase in each category
-
-All of them come from the year before the cutoff, so they don't leak future data.
-
-More checks use the same data:
-
-- **within each segment**: how well the chosen model ranks customers inside each segment
-- **one-order customers**: every model on the test-month customers with a single order in
-  the past year
-- **rolling evaluation**: the baseline and both tree models, with each of the last four
-  months as the test month, to see how much the scores move from month to month
-- **learning curve**: the trees trained on only the most recent 1, 2, 4, 8 or all
-  training months
-- **feature group importance**: the drop in test ROC AUC when one group of features is
-  shuffled across customers, for the extended trees
-
-A propensity score is used to rank customers (who to contact first) and as a
-probability (how many will respond), so both are measured on the test month:
-
-- ranking: ROC AUC, average precision, lift in the top 10%
-- probabilities: Brier score and expected calibration error, before and after
-  isotonic calibration fitted on the validation month
-
-## Results
-
-### Third version: predictions written before the run
-
-In the second version the new features made no difference to the trees. These four checks are set up where a difference is expected, with the expected outcome
-written here and committed before running them. Each will be reported as supported or not.
-
-1. **Learning curve.** For every target, the trees trained on all training months score
-   at least 0.01 ROC AUC higher than trees trained on the most recent month only. The gain
-   from 8 months to all months is smaller than the gain from 1 month to 2.
-2. **Feature group importance** (extended trees, test month). For any purchase, the
-   largest drop in ROC AUC comes from shuffling recency or frequency. For bags, category
-   shares or category recency is among the two largest drops. If so, this supports the
-   explanation for the bags result in the first version, which so far is only a likely
-   reason.
-3. **Segments in a linear model.** Adding the segment raises logistic regression's test ROC
-   AUC for every target, and changes the base trees' ROC AUC by less than 0.005. A linear
-   model can't find these groups itself, and the trees can.
-4. **One-order customers.** On test-month customers with one order in the past year, the
-   gap between the base trees and the order-count baseline is larger than on all customers,
-   for every target. The extended features help these customers more than they help all
-   customers, for at least two of the three targets.
-
-#### What happened
-
-Three parts were supported and four were not.
-
-| Prediction | Result | Verdict |
-|---|---|---|
-| 1. All training months beat the most recent month by at least 0.01 ROC AUC | One month scored the same as all 17: any purchase 0.777 against 0.772, kitchen 0.777 against 0.778, bags 0.822 against 0.827 | not supported |
-| 2a. Recency or frequency matters most for any purchase | Regularity (drop 0.027), breadth (0.022) and spend (0.016) came first; recency and frequency each dropped it by about 0.003 | not supported |
-| 2b. Category features are in the top two for bags | Category recency (0.063) and category shares (0.046) were the top two | supported |
-| 3a. Segments raise logistic regression's ROC AUC | Unchanged to four decimals for all three targets | not supported |
-| 3b. Segments change the base trees by less than 0.005 | Changes of 0.001 or less | supported |
-| 4a. The trees lead the baseline by more on one-order customers | The lead roughly doubled: any purchase 0.046 against 0.025, kitchen 0.096 against 0.051, bags 0.164 against 0.112 | supported |
-| 4b. The extended features help one-order customers more, for two of three targets | Only for bags (+0.005); any purchase −0.005, kitchen −0.015 | not supported |
-
-(one-order customers: 1,578 of the 4,324 in the test month; all scores are ROC AUC on September 2011)
-
-What this changes:
-
-- **More history did not help.** The most recent training month alone has about 4,300
-  customers, and that was enough. The trees learned as much from it as from all 17 months.
-  For any purchase, the full set scored slightly lower. That could be because the early
-  months have less than a year of history, but I did not test this.
-- **A model relying on a feature is not the same as the feature adding value.** The
-  extended trees lean on regularity more than on anything else for any purchase, yet adding
-  regularity did not raise their score in the second version. The groups overlap: a regular
-  customer is also a recent and frequent one. When one group is shuffled, the model can
-  partly fall back on the others. That is also why recency looks unimportant here, when on
-  its own it is a strong predictor (the baseline is built on it).
-- **The bags explanation now has evidence.** What a customer bought before, through category
-  recency and category shares, is what the bags model depends on most.
-- **Segments add nothing to logistic regression either.** The segments are k-means clusters
-  in the same log-scaled space the logistic regression works in. Boundaries between such
-  clusters are straight lines, which the model can already draw. This is my explanation for
-  the result, not something I tested.
-- **The model matters most where there is least history.** For customers with one order,
-  the order-count baseline can hardly rank them (ROC AUC 0.55 to 0.56). The trees' lead over
-  it about doubles there.
-
-### Second version: extended features
-
-The plan, fixed before the run:
-
-- The new features were chosen from what the first version's results suggested was
-  missing, not by trying features against the test month.
-- The model to register is chosen on the validation month (August 2011), as before.
-- The test month (September 2011) is looked at once, and the result is reported here
-  whether the new features help or not.
-- The first version's results below stay as they are, for comparison.
-
-**The new features did not make the trees better.** Seasonality, regularity, trend and
-category recency added nothing the trees could not already get from recency, frequency,
-spend and category shares. Logistic regression gained a little, and the trees'
-probabilities came out somewhat better calibrated.
-
-Test month, September 2011:
-
-| Target | Model | Base features: ROC AUC / avg. precision / calibration error | Extended features |
-|---|---|---|---|
-| any purchase | logistic regression | 0.764 / 0.782 / 0.070 | 0.767 / 0.785 / 0.065 |
-| | boosted trees | 0.770 / 0.791 / 0.057 | 0.767 / 0.790 / 0.048 |
-| kitchen | logistic regression | 0.767 / 0.732 / 0.054 | 0.769 / 0.737 / 0.050 |
-| | boosted trees | 0.778 / 0.751 / 0.044 | 0.778 / 0.751 / 0.034 |
-| bags | logistic regression | 0.806 / 0.660 / 0.034 | 0.814 / 0.676 / 0.033 |
-| | boosted trees | 0.826 / 0.699 / 0.037 | 0.825 / 0.702 / 0.022 |
-
-(calibration error is before isotonic calibration)
-
-The segment variants, now on the extended features, again scored the same as the plain
-trees, within 0.007 ROC AUC. On the validation month the extended trees were chosen for any
-purchase and kitchen, and the base trees for bags.
-
-**Rolling evaluation.** The same comparison with each of June, July, August and September
-2011 as the test month. ROC AUC, mean and range over the four months:
-
-| Target | Recent orders (no model) | Boosted trees, base | Boosted trees, extended |
-|---|---|---|---|
-| any purchase | 0.771 (0.747 to 0.783) | 0.794 (0.770 to 0.807) | 0.794 (0.767 to 0.810) |
-| kitchen | 0.761 (0.727 to 0.784) | 0.796 (0.778 to 0.810) | 0.797 (0.778 to 0.812) |
-| bags | 0.753 (0.715 to 0.776) | 0.842 (0.826 to 0.852) | 0.842 (0.825 to 0.856) |
-
-- The trees beat the baseline in every month. The margin was 0.02 for any purchase, 0.03
-  to 0.05 for kitchen, and 0.08 to 0.11 for bags.
-- The difference between base and extended features was never more than 0.003 in either
-  direction.
-- September was the hardest of the four months for every model. The single-month test in
-  the first version was a little pessimistic, not flattering.
-
-**Within each segment** (September 2011, the model chosen for each target):
-
-| Segment | Customers | Bought again (any) | ROC AUC: any / kitchen / bags |
-|---|---|---|---|
-| Active regulars | 1,683 | 0.75 | 0.75 / 0.75 / 0.81 |
-| Occasional or lapsing | 2,462 | 0.34 | 0.64 / 0.65 / 0.73 |
-| High-return | 179 | 0.32 | 0.67 / 0.73 / 0.80 |
-
-Ranking customers within a segment is harder than ranking all of them together. Part of
-the overall ROC AUC comes from telling the groups apart. The model is weakest inside the
-largest group, the occasional or lapsing buyers, probably because most of them have only
-one or two orders to go on. The high-return group is small (179 customers), so its numbers
-are rough.
-
-Two fixes came out of this run. Spark returns rows in no fixed order, so the trees came out
-slightly different on a rerun (ROC AUC 0.770 against 0.772 for any purchase), and k-means
-could give the same segments different numbers. The notebooks now sort rows before
-modelling, and segments are numbered by recency, most recent first.
-
-### First version: base features
-
-From the pipeline on Databricks Free Edition (serverless), on the full dataset. The
-notebooks were first run one by one, then end to end as one Databricks job (four tasks,
-7 minutes 41 seconds).
-
-#### Data
-
-| | |
-|---|---|
-| Raw rows (both yearly sheets) | 1,067,371 |
-| No customer id | 243,007 |
-| Zero or negative price | 6,207 |
-| Non-product codes | 5,931 |
-| Clean rows (returns included) | 794,165 (17,586 returns) |
-| Customers | 5,875 |
-
-The dropped counts overlap, and exact duplicates are removed as well. About 23% of rows
-have no customer id. They can't be followed over time, so everything below is about
-customers who ordered while logged in. The keyword categories cover 72% of spend.
-
-19 monthly snapshots (March 2010 to September 2011) have 1,700 to 4,300 active customers
-each. Apart from the earliest months (see Limitations), the share who buy again within 90
-days is highest for the September cutoffs (0.58 in 2010, 0.50 in 2011) and lowest after
-Christmas (0.33). The model trains on cutoffs up to July 2011, is calibrated
-and chosen on August 2011, and is tested on September 2011.
-
-#### Segments
-
-k-means with k from 2 to 8 and a Gaussian mixture were compared on the training months.
-k-means with k = 3 had the highest silhouette of all 14 options (0.32, against 0.23 for
-k = 4). Two random seeds gave the same segments (adjusted Rand index 1.00), and no
-segment was under 5%. The Gaussian mixture separated less well at every k and was unstable
-at k = 3. Its BIC kept improving as k grew, which says little with this many rows.
-
-| Segment | Share | Last order | Orders / year | Spend / year | Returns |
-|---|---|---|---|---|---|
-| Active regulars | 40% | 31 days ago | 5 | €1,722 | 1% of lines |
-| Occasional or lapsing | 55% | 114 days ago | 1 | €316 | 0% |
-| High-return | 5% | 105 days ago | 2 | €379 | 20% of lines |
-
-(shares and medians are over training snapshots, so a customer counts once per month they appear in)
-
-#### Propensity models (test month: September 2011)
-
-| Target | Base rate | Model | ROC AUC | Avg. precision | Lift, top 10% | Calibration error (raw → isotonic) |
-|---|---|---|---|---|---|---|
-| any purchase | 0.50 | recent orders (no model) | 0.747 | 0.749 | 1.84 | (not a probability) → 0.073 |
-| | | logistic regression | 0.764 | 0.782 | 1.91 | 0.070 → 0.065 |
-| | | boosted trees | **0.772** | **0.792** | **1.93** | 0.057 → 0.042 |
-| kitchen | 0.43 | recent orders | 0.727 | 0.671 | 1.94 | → 0.065 |
-| | | logistic regression | 0.767 | 0.732 | 2.10 | 0.054 → 0.060 |
-| | | boosted trees | **0.778** | **0.750** | **2.17** | 0.055 → 0.047 |
-| bags | 0.28 | recent orders | 0.715 | 0.507 | 2.28 | → 0.047 |
-| | | logistic regression | 0.806 | 0.660 | 2.86 | 0.034 → 0.041 |
-| | | boosted trees | **0.827** | **0.702** | **3.03** | 0.041 → 0.024 |
-
-What the numbers say:
-
-- **Whether a customer buys again is mostly explained by recent activity.** Counting
-  recent orders already reaches an AUC of 0.75, and boosted trees add 0.025.
-- **The models help most for category purchases.** For bags, the trees reach
-  0.83 against 0.72 for the baseline, and average precision rises from 0.51 to 0.70. The
-  models see what a customer bought before (their share of spend per category), while the
-  baseline only counts orders. The feature importance check in the third version supports
-  this: category recency and category shares matter most for bags.
-  Kitchen purchases are almost as common as any purchase (0.43 against 0.50 in the test
-  month), so that target behaves much like the first one.
-- **Segments did not improve the predictions.** Adding the segment as a feature changed
-  nothing (any purchase: 0.771 against 0.772). One model per segment looked best on the
-  validation month (0.819) but was slightly worse on the test month (0.768). The segments
-  are built from features the trees already use, which is probably why they add nothing
-  here. They
-  are more useful for describing customers than for predicting their purchases.
-- **The trees' probabilities were already close to calibrated.** Isotonic calibration on
-  the validation month lowered the trees' calibration error for all three targets. For
-  logistic regression it helped only for any purchase and made kitchen and bags slightly
-  worse. The baseline needs it, because order counts are not probabilities.
-
-For each target, notebook 04 registers the better of logistic regression and boosted
-trees in Unity Catalog as `propensity_<target>`, choosing by average precision on the
-validation month.
-
-### Limitations
-
-- The first version used one test month. September is in the pre-Christmas season, and
-  validation AUC (August) was higher than test AUC by 0.015 to 0.05, depending on the
-  model. The rolling evaluation in the second version covers four months, all from one
-  year, so it still can't show year-to-year changes.
-- Snapshots before December 2010 have less than a year of history, because the data
-  starts in December 2009. Those months have fewer and more recently active customers,
-  and their year-long features are cut short.
-- Categories come from keywords in item descriptions. 28% of spend is "other".
-- Customers without an id (23% of rows) are left out entirely.
+The better of logistic regression and the trees, by average precision on the validation
+month, is registered in Unity Catalog as `propensity_<target>`.
 
 ## Running it
 
@@ -327,13 +165,13 @@ validation month.
 Everything is written to the `workspace.custprop` schema. The catalog and schema are
 notebook widgets and job parameters.
 
-If the download in `01_ingest` is blocked, download the zip from the UCI page and
-upload `online_retail_II.xlsx` to the `raw` volume by hand.
+If the download in `01_ingest` is blocked, download the zip from the UCI page and upload
+`online_retail_II.xlsx` to the `raw` volume by hand.
 
 ### Tests, locally
 
-The tests run the Spark code on a small synthetic dataset (`custprop.synthetic`) with
-local Spark, so they need Java 17.
+The tests run the Spark code on a small synthetic dataset (`custprop.synthetic`) with local
+Spark, so they need Java 17.
 
 ```bash
 python -m venv .venv
@@ -346,13 +184,14 @@ pytest
 
 ```
 src/custprop/
-  config.py      table names, windows, cutoffs, targets
+  config.py      table names, windows, cutoffs, targets, chosen segmentation
   clean.py       raw export -> clean transactions
   categories.py  keyword categories from item descriptions
   snapshots.py   features and labels per customer per cutoff
   segment.py     k-means vs Gaussian mixture: comparison, fit, profiles
-  propensity.py  time-based split, models, metrics, calibration
+  propensity.py  time-based split, models, metrics, calibration, further checks
   synthetic.py   small synthetic shop for tests
 notebooks/       the four Databricks notebooks
+docs/results.md  detailed results
 databricks.yml   the job, as a Databricks Asset Bundle
 ```

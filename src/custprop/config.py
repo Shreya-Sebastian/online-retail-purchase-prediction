@@ -17,6 +17,9 @@ class Config:
     label_days: int = 90  # a "purchase" label means buying within this window after the cutoff
     first_cutoff: date = date(2010, 3, 1)  # leaves a few months of history before the first snapshot
     last_cutoff: date = date(2011, 9, 1)  # last cutoff whose label window fits before the data ends
+    # months scored by the batch job: after the test month, so their label windows aren't complete yet,
+    # as for a model scoring the current month
+    score_cutoffs: tuple[date, ...] = (date(2011, 10, 1), date(2011, 11, 1), date(2011, 12, 1))
     test_cutoffs: int = 1  # latest cutoffs held out for testing
     valid_cutoffs: int = 1  # the cutoffs before those, for calibration and model choice
     targets: tuple[str, ...] = ("any", "kitchen", "bags")

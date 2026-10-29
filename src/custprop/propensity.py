@@ -159,6 +159,24 @@ class PerSegment:
         return p
 
 
+class Calibrated:
+    """A fitted model and its isotonic map from the validation month, as one object.
+
+    This is what gets registered, so scoring gives probabilities that can be summed into an
+    expected number of buyers. It picks its own columns, so it can be handed a whole snapshot.
+    """
+
+    def __init__(self, model, calibrator: IsotonicRegression, features: list[str]):
+        self.model, self.calibrator, self.features = model, calibrator, list(features)
+
+    def predict_proba(self, x: pd.DataFrame) -> np.ndarray:
+        p = self.calibrator.predict(self.model.predict_proba(_features(x, self.features))[:, 1])
+        return np.column_stack([1 - p, p])
+
+    def predict(self, x: pd.DataFrame) -> np.ndarray:
+        return (self.predict_proba(x)[:, 1] >= 0.5).astype(int)
+
+
 @dataclass
 class Result:
     name: str

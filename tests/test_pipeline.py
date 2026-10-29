@@ -1,10 +1,11 @@
+import pickle
 from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from custprop import propensity, recommend, segment
+from custprop import monitor, propensity, recommend, segment
 from custprop.categories import category_of
 from custprop.clean import clean, clean_report, prepare_raw_pandas
 from custprop.config import monthly_cutoffs
@@ -158,6 +159,13 @@ def test_end_to_end(spark, txns):
     base_only = propensity.group_importance(by_name["gbm"].model, test, by_name["gbm"].features, "any", repeats=1)
     assert "trend" not in set(base_only["group"])
 
+    # the registered form: the trees with their calibration, handed the whole test frame
+    cal = propensity.Calibrated(by_name["gbm"].model, by_name["gbm"].calibrator, by_name["gbm"].features)
+    p = cal.predict_proba(test)
+    assert p.shape == (len(test), 2) and ((p >= 0) & (p <= 1)).all()
+    assert np.allclose(p[:, 1], by_name["gbm"].calibrator.predict(by_name["gbm"].test_scores))
+    assert np.allclose(pickle.loads(pickle.dumps(cal)).predict_proba(test), p)  # MLflow stores it pickled
+
     diffs = propensity.compare_with_intervals(results, test, "any", n_boot=50)
     assert len(diffs) == 2 * len(propensity.COMPARISONS)
     assert (diffs["ci_low"] <= diffs["ci_high"]).all()
@@ -201,6 +209,19 @@ def test_next_best_category(spark, txns):
     assert (table.loc[table.method == "popular", "distinct_suggestions"] == table.loc[table.method == "popular", "k"]).all()
     assert len(differences) == 2 and (differences["ci_low"] <= differences["ci_high"]).all()
     assert mix["suggested_first"].sum() == pytest.approx(1, abs=1e-3)  # shares are rounded
+
+
+def test_psi_and_drift():
+    rng = np.random.default_rng(0)
+    ref = rng.normal(0, 1, 5000)
+    assert monitor.psi(ref, rng.normal(0, 1, 5000)) < 0.02
+    assert monitor.psi(ref, rng.normal(1, 1, 5000)) > 0.25
+    counts = rng.poisson(0.3, 5000)  # mostly zeros: fewer bins, still finite
+    assert np.isfinite(monitor.psi(counts, rng.poisson(0.3, 5000)))
+    table = monitor.drift(pd.DataFrame({"a": ref, "b": ref}), pd.DataFrame({"a": ref, "b": ref + 1}), ["a", "b"])
+    assert table["column"].tolist() == ["b", "a"] and table["level"].tolist() == ["shift", "stable"]
+    check = monitor.expected_vs_actual([0.2, 0.3, 0.5], [0, 1, 1])
+    assert check["expected_buyers"] == 1.0 and check["actual_buyers"] == 2.0 and check["ratio"] == 2.0
 
 
 def test_paired_bootstrap():

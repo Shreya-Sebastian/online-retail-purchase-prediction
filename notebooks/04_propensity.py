@@ -6,7 +6,8 @@
 # MAGIC regression and gradient-boosted trees on the first version's features, the same two models on the
 # MAGIC extended features, and two segment variants. Trained on earlier cutoffs, calibrated and chosen on the
 # MAGIC validation month, scored on the test month. Every model is an MLflow run. The best plain model by
-# MAGIC validation average precision is registered in Unity Catalog.
+# MAGIC validation average precision is registered in Unity Catalog with its calibration, under the alias
+# MAGIC `champion` that the scoring job loads.
 # MAGIC
 # MAGIC Then more checks on the same data: ranking quality within each segment, every model on customers
 # MAGIC with a single order, a rolling evaluation over the last four months, a learning curve, and which
@@ -23,9 +24,10 @@ sys.path.append(os.path.abspath("../src"))
 import matplotlib.pyplot as plt
 import mlflow
 import pandas as pd
+from mlflow import MlflowClient
 
 from custprop.config import Config
-from custprop.propensity import (calibration_table, compare_models, compare_with_intervals, group_importance,
+from custprop.propensity import (Calibrated, calibration_table, compare_models, compare_with_intervals, group_importance,
                                  learning_curve, metrics_by_segment, metrics_on_subset, results_table,
                                  rolling_evaluation, split_by_cutoff)
 
@@ -86,9 +88,15 @@ for target in cfg.targets:
     print(f"{target}: best on the validation month is {best.name}")
     by_segment.append(metrics_by_segment(test, best.test_scores, target).assign(target=target, model=best.name))
     if dbutils.widgets.get("register") == "true":
+        # registered with its calibration, so the scoring job gets probabilities; "champion" is the version it uses
+        name = cfg.table(f"propensity_{target}")
         with mlflow.start_run(run_id=best.run_id):
-            mlflow.sklearn.log_model(best.model, "model", input_example=test[best.features].astype(float).head(5),
-                                     registered_model_name=cfg.table(f"propensity_{target}"))
+            mlflow.sklearn.log_model(Calibrated(best.model, best.calibrator, best.features), "model",
+                                     input_example=test[best.features].astype(float).head(5),
+                                     code_paths=[os.path.abspath("../src/custprop")], registered_model_name=name)
+        client = MlflowClient()
+        version = max(int(v.version) for v in client.search_model_versions(f"name='{name}'") if v.run_id == best.run_id)
+        client.set_registered_model_alias(name, "champion", version)
 
 comparison = pd.concat(tables, ignore_index=True)
 display(comparison)

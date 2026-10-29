@@ -46,8 +46,35 @@ resources:
           depends_on: [{task_key: segments}]
           notebook_task:
             notebook_path: ./notebooks/04_propensity.py
+        - task_key: recommend
+          depends_on: [{task_key: segments}]
+          notebook_task:
+            notebook_path: ./notebooks/05_recommend.py
+        - task_key: score
+          depends_on: [{task_key: propensity}]
+          notebook_task:
+            notebook_path: ./notebooks/06_score.py
       # weekly refresh; paused so nothing runs until you switch it on
       schedule:
         quartz_cron_expression: "0 0 6 ? * MON"
+        timezone_id: Europe/Amsterdam
+        pause_status: PAUSED
+
+    # scoring on its own, with whatever version is "champion", without retraining
+    custprop_scoring:
+      name: custprop-scoring
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+      tasks:
+        - task_key: score
+          notebook_task:
+            notebook_path: ./notebooks/06_score.py
+      # first day of the month; paused like the pipeline
+      schedule:
+        quartz_cron_expression: "0 0 7 1 * ?"
         timezone_id: Europe/Amsterdam
         pause_status: PAUSED

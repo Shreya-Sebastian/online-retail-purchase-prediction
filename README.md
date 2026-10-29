@@ -104,22 +104,22 @@ The project went through three rounds, each set up by what the previous one show
    instead of keywords, to cover the 28% of spend now in "other".
 2. **Product-level features for one-order customers,** where the model adds most and has
    least to go on: what was in their one basket.
-3. **Batch scoring.** A scheduled job that scores current customers into a Delta table,
-   with a check on how the score distribution moves from month to month.
-4. **A second dataset,** to see whether the findings hold for another shop.
+3. **A second dataset,** to see whether the findings hold for another shop.
 
 ## Pipeline
 
-Four notebooks, run in order. They were run one by one and then as one Databricks job set
-up in the UI. `databricks.yml` defines the same job as an Asset Bundle, but that file has
-not been deployed or tested.
+Six notebooks, run in order. The first four were run one by one and then as one Databricks
+job set up in the UI. `databricks.yml` defines the whole pipeline as an Asset Bundle, plus
+a separate monthly scoring job, but that file has not been deployed or tested.
 
 | Notebook | Writes | What it does |
 |---|---|---|
 | `01_ingest` | `raw_transactions`, `transactions` | Downloads the data to a Unity Catalog volume, stacks both yearly sheets, cleans them into Delta tables |
 | `02_snapshots` | `snapshots` | One row per customer per monthly cutoff: features from the year before, labels from the 90 days after |
 | `03_segments` | `snapshots_segmented` | Compares k-means and a Gaussian mixture, fits the chosen one on training months, logs it to MLflow |
-| `04_propensity` | MLflow runs, registered models | Trains and compares the models per target, runs the further checks and registers the best model per target in Unity Catalog |
+| `04_propensity` | MLflow runs, registered models | Trains and compares the models per target, with 95% bootstrap intervals for the differences, runs the further checks and registers the best model per target in Unity Catalog with its calibration, as `champion` |
+| `05_recommend` | MLflow runs | Next-best category: one calibrated model per category, the most likely category as the suggestion, against the most popular, most bought and most recent category |
+| `06_score` | `scores`, `score_drift` | Scores the months after the test month with the `champion` models, checks drift by PSI and expected against actual buyers |
 
 The logic lives in `src/custprop` so it can be tested outside Databricks. The notebooks
 only load data, call it, and log the results.
@@ -189,9 +189,11 @@ src/custprop/
   categories.py  keyword categories from item descriptions
   snapshots.py   features and labels per customer per cutoff
   segment.py     k-means vs Gaussian mixture: comparison, fit, profiles
-  propensity.py  time-based split, models, metrics, calibration, further checks
+  propensity.py  time-based split, models, metrics, calibration, intervals, further checks
+  recommend.py   next-best category and its baselines
+  monitor.py     PSI drift and expected against actual buyers
   synthetic.py   small synthetic shop for tests
-notebooks/       the four Databricks notebooks
+notebooks/       the six Databricks notebooks
 docs/results.md  detailed results
 databricks.yml   the job, as a Databricks Asset Bundle
 ```

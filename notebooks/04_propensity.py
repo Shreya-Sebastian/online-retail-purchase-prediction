@@ -25,9 +25,9 @@ import mlflow
 import pandas as pd
 
 from custprop.config import Config
-from custprop.propensity import (calibration_table, compare_models, group_importance, learning_curve,
-                                 metrics_by_segment, metrics_on_subset, results_table, rolling_evaluation,
-                                 split_by_cutoff)
+from custprop.propensity import (calibration_table, compare_models, compare_with_intervals, group_importance,
+                                 learning_curve, metrics_by_segment, metrics_on_subset, results_table,
+                                 rolling_evaluation, split_by_cutoff)
 
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "custprop")
@@ -59,11 +59,13 @@ REGISTERABLE = ("logistic", "gbm", "logistic_ext", "gbm_ext")
 # customers with a single order in the past year: the order-count baseline can barely rank them
 one_order = (test["orders_365d"] == 1).to_numpy()
 
-tables, by_segment, single, importance = [], [], [], []
+tables, by_segment, single, importance, intervals = [], [], [], [], []
 for target in cfg.targets:
     results = compare_models(train, valid, test, target, cfg.seed)
     tables.append(results_table(results))
     single.append(metrics_on_subset(results, test, one_order, target))
+    intervals.append(compare_with_intervals(results, test, target, seed=cfg.seed).assign(customers_in="all"))
+    intervals.append(compare_with_intervals(results, test, target, one_order, seed=cfg.seed).assign(customers_in="one order"))
     ext = next(r for r in results if r.name == "gbm_ext")
     importance.append(group_importance(ext.model, test, ext.features, target, seed=cfg.seed))
     for r in results:
@@ -90,6 +92,20 @@ for target in cfg.targets:
 
 comparison = pd.concat(tables, ignore_index=True)
 display(comparison)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## How sure the differences are
+# MAGIC
+# MAGIC Each difference the README reports, on the same test customers, with a 95% interval from 1,000 bootstrap
+# MAGIC draws of those customers. `clear` is true when the interval doesn't contain zero. Repeated for the
+# MAGIC customers with a single order.
+
+# COMMAND ----------
+
+interval_table = pd.concat(intervals, ignore_index=True)
+display(interval_table)
 
 # COMMAND ----------
 
@@ -170,6 +186,7 @@ display(rolling.groupby(["target", "model"])[["roc_auc", "avg_precision", "lift_
 
 with mlflow.start_run(run_name="evaluation-tables"):
     mlflow.log_table(comparison, "comparison.json")
+    mlflow.log_table(interval_table, "differences_with_intervals.json")
     mlflow.log_table(segment_table, "by_segment.json")
     mlflow.log_table(rolling.assign(test_cutoff=rolling.test_cutoff.astype(str)), "rolling.json")
     mlflow.log_table(single_table, "one_order_customers.json")

@@ -26,6 +26,11 @@ A propensity score is used both to rank customers (who to contact first) and as 
 probability (expected uptake), so both are measured: ranking by ROC AUC, average
 precision and lift in the top tenth; probabilities by Brier score and expected calibration
 error, before and after isotonic calibration on the validation month.
+
+How sure a difference is:
+- paired_bootstrap: the difference between two models on the same test customers, with a
+  95% interval from resampling those customers
+- compare_with_intervals: that, for the comparisons the README makes
 """
 
 from __future__ import annotations
@@ -81,6 +86,25 @@ def metrics(y, p) -> dict:
         "ece": expected_calibration_error(y, p),
         "base_rate": y.mean(),
     }
+
+
+def paired_bootstrap(y, p_a, p_b, metric=roc_auc_score, n_boot: int = 1000, seed: int = 7) -> dict:
+    """metric(b) - metric(a) on the same customers, with a 95% percentile interval.
+
+    Customers are drawn with replacement and both models are scored on each draw, so the
+    interval shows how much the difference depends on which customers happen to be in the
+    test month. It says nothing about other months; rolling_evaluation covers that.
+    """
+    y, p_a, p_b = (np.asarray(v, dtype=float) for v in (y, p_a, p_b))
+    rng = np.random.default_rng(seed)
+    diffs = []
+    for _ in range(n_boot):
+        i = rng.integers(0, len(y), len(y))
+        if y[i].min() == y[i].max():  # a draw with one outcome has no AUC
+            continue
+        diffs.append(metric(y[i], p_b[i]) - metric(y[i], p_a[i]))
+    low, high = np.percentile(diffs, [2.5, 97.5])
+    return {"diff": float(metric(y, p_b) - metric(y, p_a)), "ci_low": float(low), "ci_high": float(high)}
 
 
 def calibration_table(y, p, bins: int = 10) -> pd.DataFrame:
@@ -195,6 +219,40 @@ def compare_models(train: pd.DataFrame, valid: pd.DataFrame, test: pd.DataFrame,
         add("gbm_ext_per_segment", per, per.predict_proba(x["valid"], valid["segment"].to_numpy()),
             per.predict_proba(x["test"], test["segment"].to_numpy()))
     return results
+
+
+# (compared against, model): the differences the README reports
+COMPARISONS = [
+    ("recent_orders", "logistic"),
+    ("recent_orders", "gbm"),
+    ("logistic", "gbm"),
+    ("logistic", "logistic_ext"),
+    ("gbm", "gbm_ext"),
+    ("logistic", "logistic_segment"),
+    ("gbm", "gbm_segment"),
+]
+
+
+def compare_with_intervals(results: list[Result], test: pd.DataFrame, target: str, mask: np.ndarray | None = None,
+                           comparisons=COMPARISONS, n_boot: int = 1000, seed: int = 7) -> pd.DataFrame:
+    """Each comparison's difference in ROC AUC and average precision, with its 95% interval.
+
+    An interval that contains zero means the test month can't tell the two models apart.
+    `mask` restricts the comparison to a subset of the test customers.
+    """
+    by_name = {r.name: r for r in results}
+    y = test[f"y_{target}"].to_numpy()
+    mask = np.ones(len(y), dtype=bool) if mask is None else mask
+    rows = []
+    for a, b in comparisons:
+        if a not in by_name or b not in by_name:
+            continue
+        for metric_name, metric in (("roc_auc", roc_auc_score), ("avg_precision", average_precision_score)):
+            d = paired_bootstrap(y[mask], by_name[a].test_scores[mask], by_name[b].test_scores[mask],
+                                 metric, n_boot, seed)
+            rows.append({"target": target, "model": b, "against": a, "metric": metric_name,
+                         "customers": int(mask.sum()), **d, "clear": d["ci_low"] > 0 or d["ci_high"] < 0})
+    return pd.DataFrame(rows).round(4)
 
 
 def metrics_by_segment(test: pd.DataFrame, scores: np.ndarray, target: str) -> pd.DataFrame:

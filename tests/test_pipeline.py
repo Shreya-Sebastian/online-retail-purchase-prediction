@@ -158,6 +158,12 @@ def test_end_to_end(spark, txns):
     base_only = propensity.group_importance(by_name["gbm"].model, test, by_name["gbm"].features, "any", repeats=1)
     assert "trend" not in set(base_only["group"])
 
+    diffs = propensity.compare_with_intervals(results, test, "any", n_boot=50)
+    assert len(diffs) == 2 * len(propensity.COMPARISONS)
+    assert (diffs["ci_low"] <= diffs["ci_high"]).all()
+    sub_diffs = propensity.compare_with_intervals(results, test, "any", one_order, n_boot=20)
+    assert (sub_diffs["customers"] == one_order.sum()).all()
+
     rolling = propensity.rolling_evaluation(snaps, "any", months=3)
     assert rolling["test_cutoff"].nunique() == 3
     assert set(rolling["model"]) == {"recent_orders", "gbm", "gbm_ext"}
@@ -171,6 +177,17 @@ def test_metrics_on_known_values():
     assert m["roc_auc"] == 1.0 and m["base_rate"] == 0.5
     assert propensity.lift_at(y, p, 0.5) == 2.0
     assert propensity.expected_calibration_error(np.array([0, 1]), np.array([0.0, 1.0]), bins=2) == 0.0
+
+
+def test_paired_bootstrap():
+    rng = np.random.default_rng(0)
+    y = rng.integers(0, 2, 500)
+    noise = rng.random(500)
+    good = y + noise  # ranks every buyer above every non-buyer
+    d = propensity.paired_bootstrap(y, noise, good, n_boot=200)
+    assert d["diff"] > 0.4 and d["ci_low"] > 0.3
+    same = propensity.paired_bootstrap(y, noise, noise, n_boot=50)
+    assert same["diff"] == same["ci_low"] == same["ci_high"] == 0
 
 
 def test_rolling_needs_enough_cutoffs():

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from custprop import propensity, segment
+from custprop import propensity, recommend, segment
 from custprop.categories import category_of
 from custprop.clean import clean, clean_report, prepare_raw_pandas
 from custprop.config import monthly_cutoffs
@@ -177,6 +177,30 @@ def test_metrics_on_known_values():
     assert m["roc_auc"] == 1.0 and m["base_rate"] == 0.5
     assert propensity.lift_at(y, p, 0.5) == 2.0
     assert propensity.expected_calibration_error(np.array([0, 1]), np.array([0.0, 1.0]), bins=2) == 0.0
+
+
+def test_top_k_and_hits():
+    scores = pd.DataFrame({"bags": [0.9, 0.1, 0.5], "kitchen": [0.2, 0.8, 0.5], "toys": [0.1, 0.3, 0.1]})
+    picks = recommend.top_k(scores, 2)
+    assert picks.tolist() == [["bags", "kitchen"], ["kitchen", "toys"], ["bags", "kitchen"]]  # tie: earlier column
+    bought = pd.DataFrame({"bags": [0, 0, 0], "kitchen": [0, 0, 1], "toys": [1, 1, 0]})
+    assert recommend.hits(bought, recommend.top_k(scores, 1)).tolist() == [0, 0, 0]
+    assert recommend.hits(bought, picks).tolist() == [0, 1, 1]
+
+
+def test_next_best_category(spark, txns):
+    cats = ("bags", "kitchen", "lighting", "christmas", "decor")
+    cut = monthly_cutoffs(date(2010, 9, 1), date(2011, 6, 1))
+    snaps = snapshots(txns, cutoffs_frame(spark, cut), 365, 90, cats).toPandas()
+    train, valid, test = propensity.split_by_cutoff(snaps)
+    table, differences, mix = recommend.evaluate(train, valid, test, cats, n_boot=50)
+    assert set(table["method"]) == {"popular", "most_bought", "most_recent", "model_raw", "model_calibrated"}
+    assert table["hit_rate"].between(0, 1).all()
+    at = table.pivot(index="method", columns="k", values="hit_rate")
+    assert (at[3] >= at[1]).all()  # three suggestions can't hit less often than one
+    assert (table.loc[table.method == "popular", "distinct_suggestions"] == table.loc[table.method == "popular", "k"]).all()
+    assert len(differences) == 2 and (differences["ci_low"] <= differences["ci_high"]).all()
+    assert mix["suggested_first"].sum() == pytest.approx(1, abs=1e-3)  # shares are rounded
 
 
 def test_paired_bootstrap():

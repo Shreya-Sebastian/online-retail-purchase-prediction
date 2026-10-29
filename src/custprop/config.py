@@ -20,12 +20,19 @@ class Config:
     test_cutoffs: int = 1  # latest cutoffs held out for testing
     valid_cutoffs: int = 1  # the cutoffs before those, for calibration and model choice
     targets: tuple[str, ...] = ("any", "kitchen", "bags")
+    # categories the next-best-category suggestion chooses between; "other" is not something to suggest
+    recommend_categories: tuple[str, ...] = ("christmas", "bags", "kitchen", "lighting", "stationery", "decor", "toys")
     # Chosen from the comparison in 03_segments on the real data: k-means with k=3 had the highest
     # silhouette (0.32) and near-perfect stability across seeds (ARI 1.00), with no segment under 5%.
     segment_method: str = "kmeans"
     segment_k: int = 3
     seed: int = 7
     extra: dict = field(default_factory=dict)
+
+    @property
+    def label_targets(self) -> tuple[str, ...]:
+        """Every target a snapshot needs a label for: the propensity targets and each suggestible category."""
+        return tuple(dict.fromkeys(self.targets + self.recommend_categories))
 
     def table(self, name: str) -> str:
         return f"{self.catalog}.{self.schema}.{name}"

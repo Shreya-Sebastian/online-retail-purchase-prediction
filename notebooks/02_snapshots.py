@@ -29,7 +29,7 @@ cutoffs = monthly_cutoffs(cfg.first_cutoff, cfg.last_cutoff)
 # every label window has to end before the data does, or late cutoffs get too few positives
 assert all((last_day - c).days >= cfg.label_days for c in cutoffs), (last_day, cutoffs[-1])
 
-snaps = snapshots(txns, cutoffs_frame(spark, cutoffs), cfg.history_days, cfg.label_days, cfg.targets)
+snaps = snapshots(txns, cutoffs_frame(spark, cutoffs), cfg.history_days, cfg.label_days, cfg.label_targets)
 snaps.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(cfg.table("snapshots"))
 
 # COMMAND ----------

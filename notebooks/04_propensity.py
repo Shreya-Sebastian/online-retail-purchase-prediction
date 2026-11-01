@@ -10,9 +10,10 @@
 # MAGIC `champion` that the scoring job loads.
 # MAGIC
 # MAGIC Then more checks on the same data: ranking quality within each segment, every model on customers
-# MAGIC with a single order, a rolling evaluation over the last four months, a learning curve, and which
+# MAGIC with a single order, a rolling evaluation over the last ten months, a learning curve, and which
 # MAGIC feature groups the extended trees rely on. The expected outcome of the last three is written in the
-# MAGIC README before the run.
+# MAGIC README before the run. Round 4 adds the longer rolling window, a seed check and light tuning; its
+# MAGIC predictions are in docs/round4_predictions.md, committed before the run.
 
 # COMMAND ----------
 
@@ -29,7 +30,7 @@ from mlflow import MlflowClient
 from custprop.config import Config
 from custprop.propensity import (Calibrated, calibration_table, compare_models, compare_with_intervals, group_importance,
                                  learning_curve, metrics_by_segment, metrics_on_subset, results_table,
-                                 rolling_evaluation, split_by_cutoff)
+                                 rolling_evaluation, seed_sensitivity, split_by_cutoff, tune_models)
 
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "custprop")
@@ -181,14 +182,64 @@ display(curve)
 # MAGIC %md
 # MAGIC ## Rolling evaluation
 # MAGIC
-# MAGIC The baseline and the trees on both feature sets, with each of the last four months as the test month.
+# MAGIC The baseline and the trees on both feature sets, with each of the last ten months (December 2010 to
+# MAGIC September 2011) as the test month. Rounds 1 to 3 used the last four; those four months are included
+# MAGIC unchanged.
 
 # COMMAND ----------
 
-rolling = pd.concat([rolling_evaluation(snaps, t, months=4, seed=cfg.seed) for t in cfg.targets], ignore_index=True)
+rolling = pd.concat([rolling_evaluation(snaps, t, months=10, seed=cfg.seed) for t in cfg.targets], ignore_index=True)
 display(rolling)
 display(rolling.groupby(["target", "model"])[["roc_auc", "avg_precision", "lift_top10"]]
         .agg(["mean", "min", "max"]).round(3).reset_index())
+
+# lead of the extended trees over the order-count rule, per month, and averaged over all ten months
+# against the last four (June to September 2011), for round-4 predictions 1.1 to 1.3
+wide = rolling.pivot_table(index=["target", "test_cutoff"], columns="model", values="roc_auc").reset_index()
+wide["lead"] = wide["gbm_ext"] - wide["recent_orders"]
+display(wide.round(4))
+last4 = wide.groupby("target").tail(4)
+display(pd.DataFrame({"months_won_of_10": wide.groupby("target")["lead"].apply(lambda s: int((s > 0).sum())),
+                      "mean_lead_10": wide.groupby("target")["lead"].mean(),
+                      "mean_lead_last4": last4.groupby("target")["lead"].mean()}).round(4).reset_index())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Round 4: seeds
+# MAGIC
+# MAGIC The base and extended trees refitted with five seeds on the main split and scored on the test month.
+# MAGIC Early stopping holds out a random share of the training rows, so the seed changes the model.
+
+# COMMAND ----------
+
+seeds = pd.concat([seed_sensitivity(train, test, t) for t in cfg.targets], ignore_index=True)
+display(seeds)
+display(seeds.groupby(["target", "model"]).agg(roc_auc_min=("roc_auc", "min"), roc_auc_max=("roc_auc", "max"),
+                                                lead_min=("lead_over_rule", "min"), lead_max=("lead_over_rule", "max"))
+        .assign(roc_auc_range=lambda d: d.roc_auc_max - d.roc_auc_min).round(4).reset_index())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Round 4: light tuning
+# MAGIC
+# MAGIC Each plain model refitted with 20 random tree settings or 7 values of C, the best kept by validation
+# MAGIC average precision, as for model choice above, and reported on the test month.
+
+# COMMAND ----------
+
+tuning_candidates, tuning_summary, tuning_lead = [], [], []
+for t in cfg.targets:
+    c, s, l = tune_models(train, valid, test, t, seed=cfg.seed)
+    tuning_candidates.append(c)
+    tuning_summary.append(s)
+    tuning_lead.append(l)
+tuning_candidates = pd.concat(tuning_candidates, ignore_index=True)
+tuning_summary = pd.concat(tuning_summary, ignore_index=True)
+tuning_lead = pd.concat(tuning_lead, ignore_index=True)
+display(tuning_summary.assign(tuned_setting=tuning_summary.tuned_setting.astype(str)))
+display(tuning_lead)
 
 # COMMAND ----------
 
@@ -200,3 +251,7 @@ with mlflow.start_run(run_name="evaluation-tables"):
     mlflow.log_table(single_table, "one_order_customers.json")
     mlflow.log_table(importance_table, "group_importance.json")
     mlflow.log_table(curve, "learning_curve.json")
+    mlflow.log_table(seeds, "round4_seeds.json")
+    mlflow.log_table(tuning_summary.assign(tuned_setting=tuning_summary.tuned_setting.astype(str)), "round4_tuning.json")
+    mlflow.log_table(tuning_candidates, "round4_tuning_candidates.json")
+    mlflow.log_table(tuning_lead, "round4_tuned_lead.json")

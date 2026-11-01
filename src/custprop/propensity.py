@@ -121,18 +121,22 @@ def _log1p_positive(x):
     return np.log1p(np.clip(x, 0, None))
 
 
-def _logistic() -> Pipeline:
+def _logistic(C: float = 1.0) -> Pipeline:
     return Pipeline([
         ("log", FunctionTransformer(_log1p_positive)),
         ("scale", StandardScaler()),
-        ("model", LogisticRegression(max_iter=2000, C=1.0)),
+        ("model", LogisticRegression(max_iter=2000, C=C)),
     ])
 
 
-def _gbm(seed: int) -> HistGradientBoostingClassifier:
-    return HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05, max_leaf_nodes=31,
-                                          l2_regularization=1.0, early_stopping=True,
-                                          validation_fraction=0.15, random_state=seed)
+GBM_DEFAULTS = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, l2_regularization=1.0,
+                    min_samples_leaf=20)
+
+
+def _gbm(seed: int, **settings) -> HistGradientBoostingClassifier:
+    params = {**GBM_DEFAULTS, **settings}
+    return HistGradientBoostingClassifier(early_stopping=True, validation_fraction=0.15,
+                                          random_state=seed, **params)
 
 
 class PerSegment:
@@ -392,3 +396,88 @@ def group_importance(model, test: pd.DataFrame, columns, target: str, groups=FEA
         rows.append({"target": target, "group": group, "features": len(cols),
                      "auc_drop": float(np.mean(drops)), "auc_drop_sd": float(np.std(drops))})
     return pd.DataFrame(rows).sort_values("auc_drop", ascending=False).round(4).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------- round 4: seeds and tuning
+
+def seed_sensitivity(train: pd.DataFrame, test: pd.DataFrame, target: str,
+                     seeds=(7, 11, 23, 42, 99)) -> pd.DataFrame:
+    """The trees refitted with several seeds and scored on the test month.
+
+    Early stopping holds out a random share of the training rows, so the seed changes the
+    model. If the gap over the order-count rule only appeared for one seed, it would not be
+    a finding.
+    """
+    y_tr, y_te = train[f"y_{target}"].to_numpy(), test[f"y_{target}"].to_numpy()
+    rule = roc_auc_score(y_te, _recent_orders(test))
+    rows = []
+    for seed in seeds:
+        for name, cols in (("gbm", BASE_COLUMNS), ("gbm_ext", EXTENDED_COLUMNS)):
+            m = _gbm(seed).fit(_features(train, cols), y_tr)
+            p = m.predict_proba(_features(test, cols))[:, 1]
+            met = metrics(y_te, p)
+            rows.append({"target": target, "model": name, "seed": seed,
+                         "roc_auc": met["roc_auc"], "avg_precision": met["avg_precision"],
+                         "lead_over_rule": met["roc_auc"] - rule})
+    return pd.DataFrame(rows).round(4)
+
+
+def tuning_settings(n: int = 20, seed: int = 2026) -> list[dict]:
+    """The same random tree settings for every target and feature set, drawn once."""
+    rng = np.random.default_rng(seed)
+    return [{"learning_rate": float(np.round(np.exp(rng.uniform(np.log(0.02), np.log(0.2))), 4)),
+             "max_leaf_nodes": int(rng.choice([7, 15, 31, 63])),
+             "l2_regularization": float(rng.choice([0.0, 0.1, 1.0, 10.0])),
+             "min_samples_leaf": int(rng.choice([10, 20, 50, 100, 200]))} for _ in range(n)]
+
+
+LOGISTIC_C = (0.01, 0.03, 0.1, 0.3, 1.0, 3.0, 10.0)
+
+
+def tune_models(train: pd.DataFrame, valid: pd.DataFrame, test: pd.DataFrame, target: str,
+                seed: int = 7, n_settings: int = 20, n_boot: int = 1000):
+    """Light tuning on the validation month, reported on the test month.
+
+    Each plain model (logistic and trees, base and extended features) is refitted with every
+    candidate setting; the one with the best validation average precision is kept, the same
+    rule used to choose models in rounds 1 to 3. Returns (one row per candidate, one row per
+    model comparing default and tuned, the tuned extended trees against the order-count rule).
+    """
+    y_col = f"y_{target}"
+    ytr, yva, yte = (d[y_col].to_numpy() for d in (train, valid, test))
+    candidates, best = [], {}
+    grids = {"logistic": [{"C": c} for c in LOGISTIC_C], "gbm": tuning_settings(n_settings)}
+    for kind, settings in grids.items():
+        for suffix, cols in (("", BASE_COLUMNS), ("_ext", EXTENDED_COLUMNS)):
+            name = kind + suffix
+            for i, s in enumerate(settings):
+                est = _logistic(**s) if kind == "logistic" else _gbm(seed, **s)
+                m = est.fit(_features(train, cols), ytr)
+                pv = m.predict_proba(_features(valid, cols))[:, 1]
+                pt = m.predict_proba(_features(test, cols))[:, 1]
+                row = {"target": target, "model": name, "setting": i, **s,
+                       "valid_avg_precision": average_precision_score(yva, pv),
+                       "test_roc_auc": roc_auc_score(yte, pt),
+                       "test_avg_precision": average_precision_score(yte, pt)}
+                candidates.append(row)
+                if name not in best or row["valid_avg_precision"] > best[name][0]["valid_avg_precision"]:
+                    best[name] = (row, pt)
+    # the defaults, for comparison
+    summary = []
+    for name in best:
+        cols = EXTENDED_COLUMNS if name.endswith("_ext") else BASE_COLUMNS
+        est = _logistic() if name.startswith("logistic") else _gbm(seed)
+        m = est.fit(_features(train, cols), ytr)
+        default_auc = roc_auc_score(yte, m.predict_proba(_features(test, cols))[:, 1])
+        tuned = best[name][0]
+        summary.append({"target": target, "model": name, "default_test_roc_auc": default_auc,
+                        "tuned_test_roc_auc": tuned["test_roc_auc"],
+                        "change": tuned["test_roc_auc"] - default_auc,
+                        "tuned_valid_avg_precision": tuned["valid_avg_precision"],
+                        "tuned_setting": {k: v for k, v in tuned.items()
+                                          if k in ("C", "learning_rate", "max_leaf_nodes",
+                                                   "l2_regularization", "min_samples_leaf")}})
+    lead = paired_bootstrap(yte, _recent_orders(test), best["gbm_ext"][1], roc_auc_score, n_boot, seed)
+    lead = {"target": target, "model": "gbm_ext (tuned)", "against": "recent_orders", **lead,
+            "clear": lead["ci_low"] > 0 or lead["ci_high"] < 0}
+    return (pd.DataFrame(candidates).round(4), pd.DataFrame(summary).round(4), pd.DataFrame([lead]).round(4))

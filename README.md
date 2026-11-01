@@ -9,10 +9,13 @@ buy from a given product category (kitchen, bags), and to estimate how many will
 
 ## Key findings
 
-- **The models beat a simple order-count rule in every month tested.** Over four test months
-  (June to September 2011), boosted trees reached a ROC AUC of 0.84 for bag purchases,
-  against 0.75 for ranking customers by their recent orders. Average precision rose from
-  0.50 to 0.69.
+- **The models beat a simple order-count rule in every month tested.** Over ten test months
+  (December 2010 to September 2011, including the Christmas season), boosted trees won every
+  month for every target. For bag purchases they averaged a ROC AUC of 0.83, against 0.75
+  for ranking customers by their recent orders, and average precision rose from 0.48 to 0.64.
+- **The result is stable.** Across five random seeds the test ROC AUC moved by at most 0.006,
+  well below the lead over the rule, and light tuning did not beat the default settings.
+  Predictions for these checks were committed before the run; six of eight held.
 - **The largest gain is for category purchases, and it comes from purchase history in that
   category.** Shuffling a customer's category history costs the bags model more than any
   other feature group, while the order-count rule has no access to it.
@@ -88,8 +91,9 @@ The project went through three rounds, each set up by what the previous one show
 
 ## Limitations
 
-- All test months fall within one year (June to September 2011, summer and early autumn),
-  so the results can't show how the models hold up from one year to the next.
+- The ten test months (December 2010 to September 2011) cover one Christmas season but fall
+  within a single year, so the results can't show how the models hold up from one year to
+  the next.
 - Snapshots before December 2010 have less than a year of history, because the data starts
   in December 2009. Those months have fewer, more recently active customers.
 - Categories come from keyword rules on item descriptions, and 28% of spend falls under

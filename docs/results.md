@@ -170,6 +170,93 @@ ROC AUC on the 1,578 test-month customers with one order in the past year:
 | kitchen | 0.559 | 0.656 | 0.096 (0.051) |
 | bags | 0.551 | 0.715 | 0.164 (0.112) |
 
+## Round 4: longer window, seeds and tuning
+
+The design and predictions are in [round4_predictions.md](round4_predictions.md), committed
+(28ca6dc) before the run. The tables below come from that run; the raw tables are in
+[round4/](round4/).
+
+### Longer rolling evaluation
+
+Each of the ten months from December 2010 to September 2011 as the test month, each trained
+on all earlier months. ROC AUC, mean and range:
+
+| Target | Recent orders (no model) | Boosted trees, base | Boosted trees, extended |
+|---|---|---|---|
+| any purchase | 0.767 (0.746 to 0.783) | 0.786 (0.771 to 0.808) | 0.787 (0.768 to 0.811) |
+| kitchen | 0.761 (0.727 to 0.784) | 0.792 (0.776 to 0.812) | 0.793 (0.777 to 0.813) |
+| bags | 0.751 (0.715 to 0.776) | 0.831 (0.813 to 0.853) | 0.829 (0.808 to 0.854) |
+
+The extended trees beat the rule in all ten months for every target. Their lead over the rule,
+mean and range: any purchase 0.020 (0.005 to 0.033), kitchen 0.032 (0.022 to 0.050), bags
+0.078 (0.057 to 0.109). Average precision for bags, mean over the ten months: 0.475 for the
+rule, 0.636 for the extended trees.
+
+### Seeds
+
+Base and extended trees refitted with seeds 7, 11, 23, 42 and 99 on the main split, test
+month September 2011:
+
+| Target | Model | ROC AUC, lowest to highest | Range | Lead over the rule |
+|---|---|---|---|---|
+| any purchase | base | 0.767 to 0.772 | 0.0043 | 0.020 to 0.025 |
+| any purchase | extended | 0.767 to 0.773 | 0.0060 | 0.020 to 0.026 |
+| kitchen | base | 0.777 to 0.779 | 0.0014 | 0.050 to 0.051 |
+| kitchen | extended | 0.777 to 0.780 | 0.0030 | 0.050 to 0.053 |
+| bags | base | 0.825 to 0.829 | 0.0033 | 0.110 to 0.114 |
+| bags | extended | 0.823 to 0.827 | 0.0033 | 0.108 to 0.112 |
+
+### Light tuning
+
+Each model refitted with every candidate setting (20 shared tree settings, 7 values of C for
+logistic regression); the setting with the best validation average precision was kept.
+
+| Target | Model | Test ROC AUC, default | Tuned | Change |
+|---|---|---|---|---|
+| any purchase | logistic, base / extended | 0.764 / 0.767 | 0.764 / 0.767 | +0.001 / +0.001 |
+| any purchase | trees, base / extended | 0.772 / 0.771 | 0.764 / 0.770 | −0.008 / −0.001 |
+| kitchen | logistic, base / extended | 0.767 / 0.769 | 0.767 / 0.769 | 0.000 / 0.000 |
+| kitchen | trees, base / extended | 0.778 / 0.777 | 0.778 / 0.773 | 0.000 / −0.004 |
+| bags | logistic, base / extended | 0.806 / 0.814 | 0.806 / 0.814 | 0.000 / 0.000 |
+| bags | trees, base / extended | 0.827 / 0.824 | 0.825 / 0.816 | −0.002 / −0.009 |
+
+The same tree setting won on the validation month for all six tree models (learning rate
+0.18, 63 leaves, minimum leaf size 50), and it scored slightly lower than the defaults on the
+test month in all six. The tuned extended trees against the rule on the test month, with 95%
+paired-bootstrap intervals: any purchase +0.023 (0.010 to 0.035), kitchen +0.046 (0.033 to
+0.060), bags +0.101 (0.084 to 0.117).
+
+### Predictions against results
+
+| Prediction | Result | Verdict |
+|---|---|---|
+| 1.1 Extended trees beat the rule in all 10 months for bags and kitchen, at least 8 of 10 for any purchase | 10 of 10 for all three targets | supported |
+| 1.2 The three lowest any-purchase months are among December, January and February | The lowest were February (0.768), September (0.770) and December (0.777); January was among the highest (0.791) | not supported |
+| 1.3 The 10-month lead is at least half the June to September lead, for every target | 0.87 of it for every target (any 0.020 against 0.023, kitchen 0.032 against 0.036, bags 0.078 against 0.089) | supported |
+| 2.1 Each tree model varies by less than 0.005 across seeds, for every target | 5 of 6 did; the extended trees for any purchase varied by 0.0060 | not supported |
+| 2.2 The lead over the rule keeps its sign for every seed and target | Positive in all 30 runs, at least 0.020 | supported |
+| 3.1 Tuned trees within 0.01 of the defaults, for every target | Largest change −0.0085 | supported |
+| 3.2 A tree model still has the best validation average precision after tuning, for every target | Trees first for all three (any 0.820 against 0.767 for logistic regression, kitchen 0.776 against 0.713, bags 0.745 against 0.658) | supported |
+| 3.3 The tuned extended trees' lead has an interval above zero for kitchen and bags | Kitchen 0.033 to 0.060, bags 0.084 to 0.117 (any purchase too: 0.010 to 0.035) | supported |
+
+Six of eight predictions held.
+
+### What it shows
+
+- **The lead over the rule is not a summer effect.** Over ten months, including the
+  Christmas season, the trees won every month for every target, and the average lead was
+  0.87 of what the four summer months showed.
+- **It is not one lucky seed.** Across five seeds the test ROC AUC moved by at most 0.006,
+  much less than the lead over the rule (at least 0.020).
+- **The default settings were already adequate.** Tuning on the validation month picked a
+  faster, larger setting that did slightly worse on the test month, so the defaults stay.
+  Choosing settings on a single month carries its own risk of fitting that month.
+- **Prediction 1.2 was wrong about which months are hard.** The September cutoff, whose
+  90-day window runs into the run-up to Christmas, was one of the hardest for any purchase,
+  and its share of customers buying was the highest of the ten (50%). A plausible reading
+  is that seasonal buying brings back customers whose history gives little sign of it; this
+  is not separately tested.
+
 ## Reproducibility
 
 Spark returns rows in no fixed order, so the trees came out slightly different on a rerun

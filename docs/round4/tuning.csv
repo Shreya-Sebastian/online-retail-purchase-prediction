@@ -1,0 +1,13 @@
+target,model,default_test_roc_auc,tuned_test_roc_auc,change,tuned_valid_avg_precision,tuned_setting
+any,logistic,0.7639,0.7644,0.0005,0.763,{'C': 0.01}
+any,logistic_ext,0.7667,0.7674,0.0008,0.7673,{'C': 0.01}
+any,gbm,0.7715,0.7638,-0.0077,0.8131,"{'learning_rate': 0.1769, 'max_leaf_nodes': 63, 'l2_regularization': 1.0, 'min_samples_leaf': 50}"
+any,gbm_ext,0.7705,0.7695,-0.001,0.8199,"{'learning_rate': 0.1769, 'max_leaf_nodes': 63, 'l2_regularization': 1.0, 'min_samples_leaf': 50}"
+kitchen,logistic,0.7668,0.7669,0.0001,0.7069,{'C': 0.03}
+kitchen,logistic_ext,0.7692,0.7692,0,0.7132,{'C': 3.0}
+kitchen,gbm,0.7779,0.7778,-0.0002,0.776,"{'learning_rate': 0.1769, 'max_leaf_nodes': 63, 'l2_regularization': 1.0, 'min_samples_leaf': 50}"
+kitchen,gbm_ext,0.7768,0.7731,-0.0037,0.7692,"{'learning_rate': 0.1769, 'max_leaf_nodes': 63, 'l2_regularization': 1.0, 'min_samples_leaf': 50}"
+bags,logistic,0.8056,0.8056,0,0.6466,{'C': 10.0}
+bags,logistic_ext,0.8143,0.8143,0,0.6576,{'C': 10.0}
+bags,gbm,0.8268,0.8247,-0.0021,0.7392,"{'learning_rate': 0.1769, 'max_leaf_nodes': 63, 'l2_regularization': 1.0, 'min_samples_leaf': 50}"
+bags,gbm_ext,0.8244,0.8158,-0.0085,0.7454,"{'learning_rate': 0.1769, 'max_leaf_nodes': 63, 'l2_regularization': 1.0, 'min_samples_leaf': 50}"

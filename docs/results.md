@@ -35,9 +35,9 @@ k = 3. Its BIC kept improving as k grew, which says little with this many rows.
 
 | Segment | Share | Last order | Orders / year | Spend / year | Returns |
 |---|---|---|---|---|---|
-| Active regulars | 40% | 31 days ago | 5 | €1,722 | 1% of lines |
-| Occasional or lapsing | 55% | 114 days ago | 1 | €316 | 0% |
-| High-return | 5% | 105 days ago | 2 | €379 | 20% of lines |
+| Active regulars | 40% | 31 days ago | 5 | £1,722 | 1% of lines |
+| Occasional or lapsing | 55% | 114 days ago | 1 | £316 | 0% |
+| High-return | 5% | 105 days ago | 2 | £379 | 20% of lines |
 
 (shares and medians are over training snapshots, so a customer counts once per month they
 appear in)

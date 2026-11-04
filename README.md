@@ -172,6 +172,12 @@ notebook widgets and job parameters.
 If the download in `01_ingest` is blocked, download the zip from the UCI page and upload
 `online_retail_II.xlsx` to the `raw` volume by hand.
 
+### On Azure Databricks
+
+[docs/azure.md](docs/azure.md) moves the pipeline to Azure Databricks with Data Lake Storage Gen2 and Unity
+Catalog access through a managed identity; `infra/azure` creates those resources with Terraform. The notebooks
+themselves need no changes. Status: guide and Terraform written, not yet run.
+
 ### Tests, locally
 
 The tests run the Spark code on a small synthetic dataset (`custprop.synthetic`) with local
@@ -200,4 +206,6 @@ src/custprop/
 notebooks/       the six Databricks notebooks
 docs/results.md  detailed results
 databricks.yml   the job, as a Databricks Asset Bundle
+docs/azure.md    running the pipeline on Azure Databricks
+infra/azure/     Terraform for the Azure resources
 ```

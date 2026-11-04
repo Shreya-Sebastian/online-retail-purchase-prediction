@@ -19,6 +19,11 @@ targets:
     default: true
     workspace:
       host: https://YOUR-WORKSPACE.cloud.databricks.com  # replace with your workspace URL
+  azure:
+    # Azure Databricks (see docs/azure.md): pass the workspace's catalog with --var catalog=<name>
+    mode: development
+    workspace:
+      host: https://adb-XXXXXXXXXXXXXXXX.X.azuredatabricks.net  # replace with your workspace URL
 
 resources:
   jobs:

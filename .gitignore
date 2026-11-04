@@ -7,3 +7,8 @@ spark-warehouse/
 metastore_db/
 derby.log
 data/
+# Terraform (infra/azure)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars

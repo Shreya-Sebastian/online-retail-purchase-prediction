@@ -33,9 +33,26 @@ buy from a given product category (kitchen, bags), and to estimate how many will
   regulars (40%), occasional or lapsing buyers (55%) and a small high-return group (5%).
 - **It runs end to end as a Databricks job:** PySpark cleaning into Delta tables in Unity
   Catalog, MLflow tracking for every model, the best model per target registered in Unity
-  Catalog, and tests for the data logic.
+  Catalog, and tests for the data logic. It also ran unchanged on Azure Databricks, reading
+  and writing through my own Data Lake Storage, with the same results.
 
 Detailed tables are in [docs/results.md](docs/results.md).
+
+## Figures
+
+![Customer segments on two principal components](docs/figures/segments_map.png)
+
+The three segments, drawn on two principal components of the six segmentation features. The
+components are only for drawing; k-means used all six.
+
+![Median recency, orders, spend and returns per segment](docs/figures/segment_profiles.png)
+
+![ROC AUC in each of ten test months, rule against boosted trees](docs/figures/rolling_auc.png)
+
+![The trees' lead over the rule with bootstrap intervals and across seeds](docs/figures/lead_certainty.png)
+
+The figures are drawn by `notebooks/07_figures.py` from the pipeline's tables and the
+round-4 results in [docs/round4/](docs/round4/).
 
 ## How it was evaluated
 
@@ -175,8 +192,14 @@ If the download in `01_ingest` is blocked, download the zip from the UCI page an
 ### On Azure Databricks
 
 [docs/azure.md](docs/azure.md) moves the pipeline to Azure Databricks with Data Lake Storage Gen2 and Unity
-Catalog access through a managed identity; `infra/azure` creates those resources with Terraform. The notebooks
-themselves need no changes. Status: guide and Terraform written, not yet run.
+Catalog access through a managed identity; `infra/azure` creates those resources with Terraform, and
+`infra/azure/run_pipeline.py` does the whole run from the command line. The notebooks need no changes.
+
+Run on 4 November 2026 (North Europe, serverless jobs): all six tasks succeeded in about 31 minutes,
+the raw file landed in my own storage account through an external volume, and the test results matched
+the Free Edition run (for example ROC AUC 0.7715 for any purchase with the base trees, silhouette 0.32
+for the segments). Everything was deleted afterwards. What was different is in
+[docs/azure.md](docs/azure.md#7-what-was-different-from-the-free-edition).
 
 ### Tests, locally
 
@@ -203,9 +226,10 @@ src/custprop/
   recommend.py   next-best category and its baselines
   monitor.py     PSI drift and expected against actual buyers
   synthetic.py   small synthetic shop for tests
-notebooks/       the six Databricks notebooks
+notebooks/       the Databricks notebooks (01 to 06 the pipeline, 07 the figures)
 docs/results.md  detailed results
+docs/figures/    the figures in this README
 databricks.yml   the job, as a Databricks Asset Bundle
 docs/azure.md    running the pipeline on Azure Databricks
-infra/azure/     Terraform for the Azure resources
+infra/azure/     Terraform for the Azure resources, and run_pipeline.py for a scripted run
 ```

@@ -42,6 +42,10 @@ k = 3. Its BIC kept improving as k grew, which says little with this many rows.
 (shares and medians are over training snapshots, so a customer counts once per month they
 appear in)
 
+![Customer segments on two principal components](figures/segments_map.png)
+
+![Median recency, orders, spend and returns per segment](figures/segment_profiles.png)
+
 ## Round 1: base features
 
 | Target | Base rate | Model | ROC AUC | Avg. precision | Lift, top 10% | Calibration error (raw → isotonic) |
@@ -187,6 +191,8 @@ on all earlier months. ROC AUC, mean and range:
 | kitchen | 0.761 (0.727 to 0.784) | 0.792 (0.776 to 0.812) | 0.793 (0.777 to 0.813) |
 | bags | 0.751 (0.715 to 0.776) | 0.831 (0.813 to 0.853) | 0.829 (0.808 to 0.854) |
 
+![ROC AUC in each of ten test months](figures/rolling_auc.png)
+
 The extended trees beat the rule in all ten months for every target. Their lead over the rule,
 mean and range: any purchase 0.020 (0.005 to 0.033), kitchen 0.032 (0.022 to 0.050), bags
 0.078 (0.057 to 0.109). Average precision for bags, mean over the ten months: 0.475 for the
@@ -225,6 +231,8 @@ The same tree setting won on the validation month for all six tree models (learn
 test month in all six. The tuned extended trees against the rule on the test month, with 95%
 paired-bootstrap intervals: any purchase +0.023 (0.010 to 0.035), kitchen +0.046 (0.033 to
 0.060), bags +0.101 (0.084 to 0.117).
+
+![The lead over the rule with bootstrap intervals and across seeds](figures/lead_certainty.png)
 
 ### Predictions against results
 

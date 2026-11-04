@@ -59,6 +59,10 @@ resources:
           depends_on: [{task_key: propensity}]
           notebook_task:
             notebook_path: ./notebooks/06_score.py
+        - task_key: figures
+          depends_on: [{task_key: segments}]
+          notebook_task:
+            notebook_path: ./notebooks/07_figures.py
       # weekly refresh; paused so nothing runs until you switch it on
       schedule:
         quartz_cron_expression: "0 0 6 ? * MON"

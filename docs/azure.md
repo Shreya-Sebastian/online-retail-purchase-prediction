@@ -13,7 +13,8 @@ Time: about 1.5 to 2 hours. Cost: a few euros of the free Azure credit if you st
    alert at 50% and 100% to your email.
 2. **Spending limit:** a free account normally has one switched on, so it cannot charge beyond the free
    credit. Check it under Subscriptions > your subscription > Overview.
-3. Use one region for everything: **West Europe**.
+3. Use one region for everything. West Europe was turned away for a new free subscription in November 2026
+   ("not accepting new customers"); **North Europe** worked.
 4. Everything goes into **one resource group**, so one delete cleans it all up (step 9).
 
 ## 1. Create the Azure resources
@@ -49,6 +50,21 @@ terraform apply -var="subscription_id=<your subscription id>" -var="storage_acco
 ```
 
 The outputs give the workspace URL, the access connector id and the container URL for step 3.
+
+### Route C: one script (`infra/azure/run_pipeline.py`)
+
+Does route B and steps 3 to 6 from the command line, using your Azure sign-in for the Databricks REST API
+(no Databricks token):
+
+```bash
+az login
+python infra/azure/run_pipeline.py up northeurope   # resources, storage credential, external volume, Git folder, job
+python infra/azure/run_pipeline.py run              # run the job and wait (wait: follow a run already started)
+python infra/azure/run_pipeline.py status           # task results and the files in the external volume
+python infra/azure/run_pipeline.py down             # remove the Unity Catalog objects, then terraform destroy
+```
+
+A new account's workspace must be opened once in the browser (Launch Workspace) before its API answers.
 
 ## 2. Open the workspace and find your catalog
 
@@ -110,18 +126,29 @@ databricks bundle run custprop_pipeline -t azure --var catalog=<catalog>
 
 ## 7. What was different from the Free Edition
 
-Write down what you actually ran into; typical differences are:
+From the run on 4 November 2026 (route C, North Europe, serverless jobs):
 
-- the catalog name (the workspace catalog instead of `workspace`);
-- storage access through a managed identity, a storage credential and an external location, so no keys in code;
-- choosing compute and its auto-termination yourself, within the subscription's core limits;
-- costs appearing in Azure Cost Management.
+- **Same code, same results.** All six tasks succeeded in about 31 minutes (ingest 2.8, snapshots 0.5,
+  segments 2.2, propensity 23.0, recommend 2.1, scoring 1.0). Test ROC AUC matched the Free Edition run to
+  four decimals (any purchase 0.7715 for the base trees, kitchen 0.7779, bags 0.8268), and the segments
+  were the same (k-means, k = 3, silhouette 0.32).
+- **The data lives in my own storage account.** The raw file landed in the `raw` container through the
+  external volume `<catalog>.custprop.raw`.
+- **Keyless, least-privilege access.** Unity Catalog reaches the storage through the access connector's
+  managed identity, which is the only identity with a data role on the account. My own Azure account,
+  although it owns the subscription, was refused when it tried to list the files directly.
+- **The catalog name changed.** The workspace catalog is named after the workspace (`dbw_custprop`), passed
+  to the job as a parameter instead of `workspace`.
+- **Setup friction a new account meets:** a region that refused free subscriptions, a workspace that has to
+  be opened once in the browser before its API answers, and Azure sign-in tokens that expire after about
+  an hour, so long waits need a fresh token.
+- **Costs are visible in Azure Cost Management**, including networking the workspace creates for itself
+  (a NAT gateway and public IP in the managed resource group).
 
 ## 8. Record what you did
 
-Add one line per step you completed to the README's "Running on Azure" section, and keep one or two
-screenshots (the external location test, the file in the container, a finished run). Only claim the steps
-you actually completed.
+Keep one or two screenshots (the external location test, the file in the container, a finished run) and
+only claim the steps you actually completed.
 
 ## 9. Clean up
 

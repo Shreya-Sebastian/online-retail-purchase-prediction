@@ -12,3 +12,5 @@ data/
 *.tfstate
 *.tfstate.*
 *.tfvars
+# run_pipeline.py state (names and URLs only)
+infra/azure/.run_state.json

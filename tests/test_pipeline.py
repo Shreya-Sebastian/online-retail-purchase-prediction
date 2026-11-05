@@ -127,7 +127,8 @@ def test_end_to_end(spark, txns):
     assert (reshuffled.predict(train) == labels_).mean() > 0.99
     for d in (train, valid, test):
         d["segment"] = seg.predict(d)
-    assert segment.profile(train, train["segment"].to_numpy())["share"].sum() == pytest.approx(1)
+    # profile() rounds each share to two decimals, so three shares can add up to 0.99 or 1.01
+    assert segment.profile(train, train["segment"].to_numpy())["share"].sum() == pytest.approx(1, abs=0.02)
 
     results = propensity.compare_models(train, valid, test, "any")
     names = [r.name for r in results]

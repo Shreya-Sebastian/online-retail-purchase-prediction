@@ -4,37 +4,25 @@ Customer segmentation and purchase prediction on Databricks, using two years of 
 transactions from a UK online gift shop (Online Retail II, UCI): about a million rows and
 5,875 customers after cleaning.
 
-The aim is to rank customers by how likely they are to buy again in the next 90 days, or to
-buy from a given product category (kitchen, bags), and to estimate how many will.
+The models rank customers by how likely they are to buy again in the next 90 days, overall
+and per product category (kitchen, bags), and estimate how many will.
 
 ## Key findings
 
-- **The models beat a simple order-count rule in every month tested.** Over ten test months
-  (December 2010 to September 2011, including the Christmas season), boosted trees won every
-  month for every target. For bag purchases they averaged a ROC AUC of 0.83, against 0.75
-  for ranking customers by their recent orders, and average precision rose from 0.48 to 0.64.
-- **The result is stable.** Across five random seeds the test ROC AUC moved by at most 0.006,
-  well below the lead over the rule, and light tuning did not beat the default settings.
-  Predictions for these checks were committed before the run; six of eight held.
-- **The largest gain is for category purchases, and it comes from purchase history in that
-  category.** Shuffling a customer's category history costs the bags model more than any
-  other feature group, while the order-count rule has no access to it.
-- **The model adds most where customers have least history.** Among customers with a
-  single order in the past year (about a third of the test month), the order-count rule
-  can hardly rank anyone (ROC AUC 0.55 to 0.56). There the trees' lead over it is 1.5 to
-  1.9 times as large as over all customers, reaching 0.16 ROC AUC for bags.
-- **The probabilities can be used as they are.** After calibration on the validation
-  month, the trees' expected calibration error was below 0.05 for every target, so the
+- **Boosted trees beat a simple order-count rule in all ten test months**, for every target.
+  The gain is largest for bags: ROC AUC 0.83 against 0.75, average precision 0.64 against
+  0.48. For any purchase the gain is small.
+- **The gain comes from category history**, which the order-count rule doesn't see.
+- **The model adds most where history is thinnest.** For customers with a single order in
+  the past year, the rule barely ranks anyone (ROC AUC 0.55); the trees' lead there is 1.5
+  to 1.9 times larger than overall.
+- **The probabilities are calibrated** (expected calibration error below 0.05), so the
   scores also estimate how many customers will buy.
-- **One month of history is enough to train on.** Trees trained on the most recent month
-  alone (about 4,300 customers) scored the same as trees trained on all 17 months, which
-  keeps retraining cheap.
-- **Three interpretable customer segments**, chosen from 14 candidate models: active
-  regulars (40%), occasional or lapsing buyers (55%) and a small high-return group (5%).
-- **It runs end to end as a Databricks job:** PySpark cleaning into Delta tables in Unity
-  Catalog, MLflow tracking for every model, the best model per target registered in Unity
-  Catalog, and tests for the data logic. It also ran unchanged on Azure Databricks, reading
-  and writing through my own Data Lake Storage, with the same results.
+- **Stable and cheap to retrain.** Five random seeds moved ROC AUC by at most 0.006, and
+  one month of training data scored the same as seventeen.
+- **Three customer segments:** active regulars (40%), occasional or lapsing buyers (55%)
+  and a small high-return group (5%). They describe customers well but did not improve
+  the predictions.
 
 Detailed tables are in [docs/results.md](docs/results.md).
 
@@ -42,8 +30,8 @@ Detailed tables are in [docs/results.md](docs/results.md).
 
 ![Customer segments on two principal components](docs/figures/segments_map.png)
 
-The three segments, drawn on two principal components of the six segmentation features. The
-components are only for drawing; k-means used all six.
+The segments drawn on two principal components, for display only; k-means used all six
+segmentation features.
 
 ![Median recency, orders, spend and returns per segment](docs/figures/segment_profiles.png)
 
@@ -51,185 +39,56 @@ components are only for drawing; k-means used all six.
 
 ![The trees' lead over the rule with bootstrap intervals and across seeds](docs/figures/lead_certainty.png)
 
-The figures are drawn by `notebooks/07_figures.py` from the pipeline's tables and the
-round-4 results in [docs/round4/](docs/round4/).
-
 ## How it was evaluated
 
-These rules were set at the start and kept for every experiment:
+- **Point-in-time features.** Each monthly snapshot uses only the year before the cutoff
+  for features and the 90 days after it for labels. Tests check the boundary.
+- **Out-of-time validation.** Train on earlier months, choose and calibrate on the next,
+  report on the month after, repeated over ten test months.
+- **A baseline first.** Every model is compared with ranking customers by recent orders.
+- **Ranking and calibration** are both measured: ROC AUC, average precision and top-decile
+  lift for who to contact; calibration error for how many will buy.
+- **Predictions written down first.** Before each round of further checks, the expected
+  outcomes were committed. Three of seven held in round three and six of eight in round
+  four, and all are reported.
 
-- **No leakage.** Features for a cutoff use only the year before it, and labels only the 90
-  days from the cutoff on. Tests check the boundary, including a purchase on the cutoff day
-  itself.
-- **Split by time, not at random.** Models train on earlier months, are chosen and
-  calibrated on the next month, and are tested on the month after that, the way they would
-  be used.
-- **A baseline first.** Every model is compared with ranking customers by their recent
-  orders, so any gain is measured against something a business could do without a model.
-- **Both uses of a score are measured.** Ranking (ROC AUC, average precision, lift in the
-  top 10%) for deciding who to contact, and calibration (Brier score, calibration error)
-  for estimating how many will respond.
-- **Choices are made on the validation month.** The test month is only used to report.
+## What did not help
 
-## How the work developed
-
-The project went through three rounds, each set up by what the previous one showed.
-
-1. **Baseline comparison.** Logistic regression and boosted trees against the order-count
-   rule, for any purchase, kitchen and bags. The trees were best for every target, with a
-   modest gain for any purchase and a large one for bags. Segments were compared as an
-   extra feature and as one model per segment.
-2. **Testing what the model might be missing.** Four groups of features were added that the
-   segments don't contain: seasonality, regularity of orders, trend and category recency.
-   The comparison was repeated over four test months instead of one, and per segment.
-3. **Predictions written down before running.** Four further checks were set up where a
-   difference was expected, with the expected outcome committed before the run: a learning
-   curve, feature group importance, segments in a linear model, and customers with a single
-   order. Three of the seven predicted outcomes held, and the rest changed the picture, as
-   described below.
-
-## What did not help, and what that shows
-
-- **The extra features did not improve the trees.** Seasonality, regularity, trend and
-  category recency changed their ROC AUC by at most 0.003 in any of twelve month and target
-  combinations. Logistic regression gained a little (bags 0.806 to 0.814). The trees
-  already got the same information from recency, frequency, spend and category shares.
-- **A feature the model relies on is not necessarily one that adds value.** The extended
-  trees rely on regularity more than on anything else for any purchase, yet adding it did
-  not raise their score. The feature groups overlap, so when one is shuffled the model can
-  partly fall back on another.
-- **Segments describe customers but do not improve predictions.** Adding the segment
-  changed no model's ROC AUC by more than 0.007, including logistic regression. The segments
-  are built from the same features the models use. Within each segment the model is weakest
-  for the occasional or lapsing buyers (ROC AUC 0.64 for any purchase), who have the least
-  history to go on.
-- **More history did not help.** This was predicted the other way, and is listed among the
-  findings above.
+- **Extra features** (seasonality, regularity, trend, category recency) changed the trees'
+  ROC AUC by at most 0.003; the base features already carried the information.
+- **Segments** changed no model by more than 0.007 ROC AUC, as they are built from the same
+  features. Within segments, the model is weakest for occasional buyers (ROC AUC 0.64).
 
 ## Limitations
 
-- The ten test months (December 2010 to September 2011) cover one Christmas season but fall
-  within a single year, so the results can't show how the models hold up from one year to
-  the next.
-- Snapshots before December 2010 have less than a year of history, because the data starts
-  in December 2009. Those months have fewer, more recently active customers.
-- Categories come from keyword rules on item descriptions, and 28% of spend falls under
-  "other".
-- Customers without an id (23% of rows) are left out entirely.
-- The explanations for why segments and extra features did not help are my reading of the
-  results, not separately tested.
-
-## Next steps
-
-1. **Better categories.** Group products by their descriptions with text embeddings
-   instead of keywords, to cover the 28% of spend now in "other".
-2. **Product-level features for one-order customers,** where the model adds most and has
-   least to go on: what was in their one basket.
-3. **A second dataset,** to see whether the findings hold for another shop.
+- All test months fall within one year, with one Christmas season.
+- Product categories come from keyword rules; 28% of spend is "other".
+- Customers without an id (23% of rows) are left out.
 
 ## Pipeline
 
-Six notebooks, run in order. The first four were run one by one and then as one Databricks
-job set up in the UI. `databricks.yml` defines the whole pipeline as an Asset Bundle, plus
-a separate monthly scoring job, but that file has not been deployed or tested.
+| Notebook | What it does |
+|---|---|
+| `01_ingest` | Downloads the data and cleans it into Delta tables in Unity Catalog |
+| `02_snapshots` | One row per customer per monthly cutoff: features before, labels after |
+| `03_segments` | Compares k-means and a Gaussian mixture, fits the chosen segmentation |
+| `04_propensity` | Trains and compares the models per target, logs them to MLflow, registers the best |
+| `05_recommend` | Next-best category per customer, against simple baselines |
+| `06_score` | Scores new months with the registered models and checks drift (PSI) |
+| `07_figures` | Draws the figures above |
 
-| Notebook | Writes | What it does |
-|---|---|---|
-| `01_ingest` | `raw_transactions`, `transactions` | Downloads the data to a Unity Catalog volume, stacks both yearly sheets, cleans them into Delta tables |
-| `02_snapshots` | `snapshots` | One row per customer per monthly cutoff: features from the year before, labels from the 90 days after |
-| `03_segments` | `snapshots_segmented` | Compares k-means and a Gaussian mixture, fits the chosen one on training months, logs it to MLflow |
-| `04_propensity` | MLflow runs, registered models | Trains and compares the models per target, with 95% bootstrap intervals for the differences, runs the further checks and registers the best model per target in Unity Catalog with its calibration, as `champion` |
-| `05_recommend` | MLflow runs | Next-best category: one calibrated model per category, the most likely category as the suggestion, against the most popular, most bought and most recent category |
-| `06_score` | `scores`, `score_drift` | Scores the months after the test month with the `champion` models, checks drift by PSI and expected against actual buyers |
-
-The logic lives in `src/custprop` so it can be tested outside Databricks. The notebooks
-only load data, call it, and log the results.
-
-### Cleaning
-
-The raw export mixes purchases with other things. Cancellations (invoice numbers starting
-with C) are kept and flagged as returns, because the return rate is a feature. Rows without
-a customer id, non-product codes (postage, bank charges, manual adjustments) and zero or
-negative prices are dropped. The notebook reports how many rows each rule matches. The
-counts overlap.
-
-### Models
-
-For each target the same comparison is run:
-
-- **recent_orders**: no model, rank by number of orders in the last 90 days
-- **logistic**, **gbm**: logistic regression on log-scaled features, and gradient-boosted
-  trees, both on the base features (recency, frequency, spend, returns, category shares)
-- **logistic_ext**, **gbm_ext**: the same two models on the extended features (seasonality,
-  regularity, trend, category recency)
-- **logistic_segment**, **gbm_segment**, **gbm_ext_segment**: with the segment as a feature
-- **gbm_ext_per_segment**: one extended model per segment
-
-The better of logistic regression and the trees, by average precision on the validation
-month, is registered in Unity Catalog as `propensity_<target>`.
+The logic lives in `src/custprop` and is unit-tested outside Databricks; the notebooks load
+data, call it and log results. `databricks.yml` defines the pipeline as one job.
 
 ## Running it
 
-### On Databricks (Free Edition)
+On Databricks: create a Git folder from this repository and run the notebooks in order, or
+deploy the job with `databricks bundle deploy` (set your workspace URL in `databricks.yml`
+first). Tables are written to `workspace.custprop`.
 
-1. Create a Free Edition account at databricks.com and open the workspace.
-2. Workspace > Create > Git folder, and paste this repository's URL.
-3. Run the notebooks in order, or deploy the job with the Databricks CLI:
-
-   ```bash
-   databricks bundle deploy
-   databricks bundle run custprop_pipeline
-   ```
-
-   Set your workspace URL in `databricks.yml` first.
-
-Everything is written to the `workspace.custprop` schema. The catalog and schema are
-notebook widgets and job parameters.
-
-If the download in `01_ingest` is blocked, download the zip from the UCI page and upload
-`online_retail_II.xlsx` to the `raw` volume by hand.
-
-### On Azure Databricks
-
-[docs/azure.md](docs/azure.md) moves the pipeline to Azure Databricks with Data Lake Storage Gen2 and Unity
-Catalog access through a managed identity; `infra/azure` creates those resources with Terraform, and
-`infra/azure/run_pipeline.py` does the whole run from the command line. The notebooks need no changes.
-
-Run on 4 November 2026 (North Europe, serverless jobs): all six tasks succeeded in about 31 minutes,
-the raw file landed in my own storage account through an external volume, and the test results matched
-the Free Edition run (for example ROC AUC 0.7715 for any purchase with the base trees, silhouette 0.32
-for the segments). Everything was deleted afterwards. What was different is in
-[docs/azure.md](docs/azure.md#7-what-was-different-from-the-free-edition).
-
-### Tests, locally
-
-The tests run the Spark code on a small synthetic dataset (`custprop.synthetic`) with local
-Spark, so they need Java 17.
+Tests run the Spark code on a small synthetic dataset with local Spark (Java 17 needed):
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 pytest
-```
-
-## Code layout
-
-```
-src/custprop/
-  config.py      table names, windows, cutoffs, targets, chosen segmentation
-  clean.py       raw export -> clean transactions
-  categories.py  keyword categories from item descriptions
-  snapshots.py   features and labels per customer per cutoff
-  segment.py     k-means vs Gaussian mixture: comparison, fit, profiles
-  propensity.py  time-based split, models, metrics, calibration, intervals, further checks
-  recommend.py   next-best category and its baselines
-  monitor.py     PSI drift and expected against actual buyers
-  synthetic.py   small synthetic shop for tests
-notebooks/       the Databricks notebooks (01 to 06 the pipeline, 07 the figures)
-docs/results.md  detailed results
-docs/figures/    the figures in this README
-databricks.yml   the job, as a Databricks Asset Bundle
-docs/azure.md    running the pipeline on Azure Databricks
-infra/azure/     Terraform for the Azure resources, and run_pipeline.py for a scripted run
 ```
